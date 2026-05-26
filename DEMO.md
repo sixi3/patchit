@@ -1,15 +1,40 @@
 # Loupe iPhone Demo
 
-This workspace contains a self-contained PWA prototype for controlling Mac-local Codex from an iPhone.
+This workspace contains a self-contained PWA prototype for controlling Mac-local coding agents (Codex and Claude Code) from an iPhone.
 
 ## What the demo shows
 
 - A single-screen Opencode-style workspace/chat interface.
-- Dispatching custom chat prompts to Mac-local Codex.
+- A harness picker (codex / claude code) in the composer — only enabled when the binary is actually installed.
+- Dispatching custom chat prompts to the selected Mac-local agent.
 - A tappable session container at the top of the screen.
 - A session window with `messages`, `files`, and `actions` tabs.
-- Streaming `codex exec --json` events back to the phone.
-- Creating new Mac folders/workspaces from the phone and using them as Codex workspaces.
+- Streaming agent events back to the phone:
+  - Codex: native `codex exec --json` events.
+  - Claude Code: `claude -p --output-format stream-json` events, normalized at the daemon into a common shape (thread_start, tool_use, tool_result, file_change, retry, result).
+- Creating new Mac folders/workspaces from the phone and using them as agent workspaces.
+
+## Harness setup
+
+The daemon auto-discovers both agents on startup. Run `node daemon.js` and it will print which harnesses are available, e.g.:
+
+```text
+Harnesses detected:
+  codex        OK   (codex-cli 0.133.0-alpha.1)
+               /Applications/Codex.app/Contents/Resources/codex
+  claude-code  OK   (2.1.142 (Claude Code))
+               /Users/.../Claude/claude-code/2.1.142/claude.app/Contents/MacOS/claude
+Default harness: codex
+```
+
+Discovery order for Claude:
+1. `$CLAUDE_BIN` env var (override)
+2. `claude` on `PATH`
+3. Claude Desktop's bundled CLI under `~/Library/Application Support/Claude/claude-code/<version>/claude.app/Contents/MacOS/claude` (latest version wins)
+
+Each harness must be authenticated independently before it can run a task:
+- Codex: run `codex` once and complete sign-in.
+- Claude Code: run the binary once with `/login` and finish the claude.ai OAuth flow.
 
 ## Run locally
 

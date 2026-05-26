@@ -444,6 +444,59 @@
       align-items: end;
     }
 
+    .harness-row {
+      width: min(880px, 100%);
+      margin: 0 auto 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .harness-label {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      margin-right: 4px;
+    }
+
+    .harness-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 11px;
+      border: 1px solid var(--line-hot);
+      border-radius: 999px;
+      background: var(--panel-2);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      cursor: pointer;
+      letter-spacing: 0;
+    }
+
+    .harness-pill.active {
+      border-color: rgba(242, 204, 96, 0.7);
+      background: rgba(242, 204, 96, 0.12);
+      color: var(--text);
+    }
+
+    .harness-pill[disabled],
+    .harness-pill.unavailable {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .harness-pill .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--dim);
+    }
+
+    .harness-pill.active .dot { background: var(--yellow); }
+    .harness-pill.unavailable .dot { background: var(--red); }
+
     textarea {
       width: 100%;
       min-height: 96px;
@@ -753,8 +806,11 @@
     </main>
 
     <footer class="composer">
+      <div class="harness-row" id="harnessRow" aria-label="Agent harness">
+        <span class="harness-label">agent</span>
+      </div>
       <form class="composer-inner" id="chatForm">
-        <textarea id="messageInput" placeholder="Ask Codex to inspect, explain, or change this workspace...">Reply with one sentence confirming this request reached Codex on my Mac. Do not edit files.</textarea>
+        <textarea id="messageInput" placeholder="Ask the agent to inspect, explain, or change this workspace...">Reply with one sentence confirming this request reached the agent on my Mac. Do not edit files.</textarea>
         <button class="send" id="sendButton" aria-label="Send message">↵</button>
       </form>
       <div class="hint">
@@ -789,6 +845,7 @@
     const state = {
       health: null,
       workspaceId: null,
+      harnessId: null,
       sessions: [],
       activeSessionId: null,
       activeSessionTab: "messages",
@@ -920,7 +977,7 @@
             <div class="session-title">${escapeHtml(session.title)}</div>
             <span class="status-chip ${escapeHtml(session.status)}">${escapeHtml(session.status)}</span>
           </div>
-          <div class="session-meta">${escapeHtml(session.workspace?.name || "workspace")} · ${session.messages.length} messages · ${session.files.length} files · ${session.actions.length} actions</div>
+          <div class="session-meta">${escapeHtml(session.harnessLabel || session.harnessId || "agent")} · ${escapeHtml(session.workspace?.name || "workspace")} · ${session.messages.length} msg · ${session.files.length} files · ${session.actions.length} actions</div>
         </button>
       `).join("");
     }
@@ -993,12 +1050,14 @@
       $("#daemonPillText").textContent = isRunning ? "running" : state.health?.ok ? "online" : "offline";
     }
 
-    function handleCodexEvent(session, event) {
+    function handleAgentEvent(session, event) {
       const at = now();
       if (event.type === "status") {
         session.actions.push({ label: "status", status: event.status || "status", command: event.text, at });
       } else if (event.type === "command") {
         session.actions.push({ label: "command", status: "started", command: event.text, at });
+      } else if (event.type === "error") {
+        session.actions.push({ label: "error", status: "failed", command: event.text || "error", at });
       } else if (event.type === "stderr" || event.type === "stdout") {
         session.actions.push({ label: event.type, status: event.type, command: event.type, output: event.text, at });
       } else if (event.type === "done") {
@@ -1032,6 +1091,51 @@
             at
           });
         }
+      } else if (event.type === "claude") {
+        if (event.kind === "thread_start") {
+          session.messages.push({
+            role: "system",
+            label: "thread",
+            body: `${event.sessionId}${event.model ? ` · ${event.model}` : ""}`,
+            at
+          });
+        } else if (event.kind === "message") {
+          session.messages.push({ role: "claude", label: "claude", body: event.text || "", at });
+        } else if (event.kind === "tool_use") {
+          session.actions.push({
+            label: event.toolName || "tool",
+            status: "started",
+            command: event.input || "",
+            at
+          });
+        } else if (event.kind === "tool_result") {
+          session.actions.push({
+            label: "result",
+            status: event.isError ? "failed" : "completed",
+            command: event.isError ? "tool error" : "tool result",
+            output: event.output || "",
+            at
+          });
+        } else if (event.kind === "file_change") {
+          session.files.push({ path: event.path, kind: event.changeKind || "change", at });
+        } else if (event.kind === "retry") {
+          session.actions.push({
+            label: "retry",
+            status: "retrying",
+            command: `attempt ${event.attempt}/${event.maxRetries} (${event.error || "unknown"})`,
+            at
+          });
+        } else if (event.kind === "result") {
+          const cost = (typeof event.totalCostUsd === "number" && event.totalCostUsd > 0)
+            ? ` · $${event.totalCostUsd.toFixed(4)}`
+            : "";
+          session.actions.push({
+            label: "usage",
+            status: event.isError ? "failed" : "completed",
+            command: `${event.numTurns || 0} turns · in ${event.usage?.input_tokens ?? 0} · out ${event.usage?.output_tokens ?? 0}${cost}`,
+            at
+          });
+        }
       }
 
       renderSessions();
@@ -1047,6 +1151,7 @@
         $("#workspacePath").textContent = "Run node daemon.js on the Mac";
         $("#phoneUrl").textContent = "Open from iPhone: unavailable";
         renderUsage();
+        renderHarnesses();
         setRunning(false);
         return;
       }
@@ -1064,7 +1169,35 @@
       const phoneUrl = (health.urls || []).find((url) => !url.includes("localhost")) || location.href;
       $("#phoneUrl").textContent = `Open from iPhone: ${phoneUrl}`;
       renderUsage();
+      renderHarnesses();
       setRunning(state.running);
+    }
+
+    function renderHarnesses() {
+      const row = $("#harnessRow");
+      const harnesses = state.health?.harnesses || [];
+      // Pick a sensible default: the daemon's defaultHarness, falling back to first available.
+      if (!state.harnessId) {
+        const preferred = state.health?.defaultHarness;
+        const firstAvailable = harnesses.find((h) => h.available)?.id;
+        state.harnessId = (preferred && harnesses.find((h) => h.id === preferred && h.available)) ? preferred : firstAvailable || null;
+      }
+      // If the previously selected harness vanished (daemon restart, etc.), re-pick.
+      if (state.harnessId && !harnesses.find((h) => h.id === state.harnessId && h.available)) {
+        state.harnessId = harnesses.find((h) => h.available)?.id || null;
+      }
+
+      const pills = harnesses.map((harness) => {
+        const classes = ["harness-pill"];
+        if (harness.id === state.harnessId) classes.push("active");
+        if (!harness.available) classes.push("unavailable");
+        const title = harness.available
+          ? (harness.version || harness.bin || harness.label)
+          : `Not installed${harness.bin ? ` (looked for ${harness.bin})` : ""}`;
+        return `<button type="button" class="${classes.join(" ")}" data-harness="${escapeHtml(harness.id)}" ${harness.available ? "" : "disabled"} title="${escapeHtml(title)}"><span class="dot"></span>${escapeHtml(harness.label)}</button>`;
+      }).join("");
+
+      row.innerHTML = `<span class="harness-label">agent</span>${pills}`;
     }
 
     function renderFsListing() {
@@ -1136,35 +1269,44 @@
       }
     }
 
-    async function startCodex(message) {
+    async function startSession(message) {
       if (state.eventSource) state.eventSource.close();
+      const harnessId = state.harnessId;
+      const harness = (state.health?.harnesses || []).find((h) => h.id === harnessId);
+      if (!harness || !harness.available) {
+        toast("No agent selected. Install Codex or Claude Code and refresh.");
+        return;
+      }
+
       const session = createLocalSession(message);
+      session.harnessId = harnessId;
+      session.harnessLabel = harness.label;
       setRunning(true);
       renderSessions();
       openSession(session.localId);
 
       try {
-        const response = await fetch("/api/codex/start", {
+        const response = await fetch("/api/sessions/start", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ message, workspaceId: state.workspaceId })
+          body: JSON.stringify({ message, workspaceId: state.workspaceId, harness: harnessId })
         });
         const data = await response.json();
-        if (!response.ok || !data.ok) throw new Error(data.error || "Could not start Codex");
+        if (!response.ok || !data.ok) throw new Error(data.error || `Could not start ${harness.label}`);
 
         session.remoteId = data.sessionId;
         session.workspace = data.workspace || session.workspace;
         session.status = "running";
-        $("#sessionHint").textContent = `${data.sessionId} · ${data.workspace?.name || "workspace"}`;
-        toast("Codex started on your Mac.");
+        $("#sessionHint").textContent = `${data.sessionId} · ${harness.label} · ${data.workspace?.name || "workspace"}`;
+        toast(`${harness.label} started on your Mac.`);
         renderSessions();
         renderSessionView();
 
-        const source = new EventSource(`/api/codex/events/${data.sessionId}`);
+        const source = new EventSource(`/api/sessions/events/${data.sessionId}`);
         state.eventSource = source;
         source.onmessage = (event) => {
           const parsed = JSON.parse(event.data);
-          handleCodexEvent(session, parsed);
+          handleAgentEvent(session, parsed);
           if (parsed.type === "done") {
             source.close();
             setRunning(false);
@@ -1240,7 +1382,14 @@
         toast("Write a message first.");
         return;
       }
-      startCodex(message);
+      startSession(message);
+    });
+
+    $("#harnessRow").addEventListener("click", (event) => {
+      const pill = event.target.closest("[data-harness]");
+      if (!pill || pill.disabled) return;
+      state.harnessId = pill.dataset.harness;
+      renderHarnesses();
     });
 
     if ("serviceWorker" in navigator) {

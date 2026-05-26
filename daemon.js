@@ -2,12 +2,13 @@ const http = require("http");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const HOST = "0.0.0.0";
 const PORT = Number(process.env.PORT || 4173);
 const ROOT = __dirname;
 const CODEX_BIN = process.env.CODEX_BIN || "/Applications/Codex.app/Contents/Resources/codex";
+const CLAUDE_BIN = process.env.CLAUDE_BIN || findClaudeBin();
 const WORKSPACE_STORE = path.join(ROOT, ".loupe-workspaces.json");
 const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 const CODEX_SESSIONS_DIR = path.join(CODEX_HOME, "sessions");
@@ -15,6 +16,63 @@ const CODEX_SESSIONS_DIR = path.join(CODEX_HOME, "sessions");
 const sessions = new Map();
 const recentRequests = [];
 const workspaces = getConfiguredWorkspaces();
+const harnessRegistry = buildHarnessRegistry();
+
+function findClaudeBin() {
+  // 1. claude on PATH
+  const which = spawnSync("which", ["claude"], { timeout: 1500 });
+  if (which.status === 0) {
+    const trimmed = which.stdout.toString().trim();
+    if (trimmed) return trimmed;
+  }
+  // 2. Claude Desktop's embedded CLI (latest version)
+  const desktopDir = path.join(os.homedir(), "Library/Application Support/Claude/claude-code");
+  try {
+    const versions = fs.readdirSync(desktopDir)
+      .filter((v) => {
+        try {
+          return fs.statSync(path.join(desktopDir, v, "claude.app/Contents/MacOS/claude")).isFile();
+        } catch { return false; }
+      })
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    if (versions.length) {
+      return path.join(desktopDir, versions[0], "claude.app/Contents/MacOS/claude");
+    }
+  } catch {}
+  return null;
+}
+
+function detectBin(bin) {
+  if (!bin) return { available: false };
+  if (!fs.existsSync(bin)) return { available: false, bin };
+  try {
+    const result = spawnSync(bin, ["--version"], { timeout: 4000, killSignal: "SIGKILL" });
+    if (result.status === 0) {
+      const version = (result.stdout?.toString() || result.stderr?.toString() || "").trim().split(/\r?\n/)[0];
+      return { available: true, bin, version };
+    }
+  } catch {}
+  return { available: false, bin };
+}
+
+function buildHarnessRegistry() {
+  return [
+    { id: "codex", label: "codex", ...detectBin(CODEX_BIN) },
+    { id: "claude-code", label: "claude code", ...detectBin(CLAUDE_BIN) }
+  ];
+}
+
+function getHarness(id) {
+  return harnessRegistry.find((h) => h.id === id);
+}
+
+function defaultHarnessId() {
+  const codex = getHarness("codex");
+  if (codex?.available) return "codex";
+  const claude = getHarness("claude-code");
+  if (claude?.available) return "claude-code";
+  return "codex";
+}
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -258,11 +316,20 @@ function addEvent(session, event) {
   }
 }
 
-function createSession(message, workspaceId) {
+function createSession(message, workspaceId, requestedHarness) {
   const workspace = resolveWorkspace(workspaceId);
-  const id = `codex-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const harnessId = (requestedHarness && getHarness(requestedHarness)?.available)
+    ? requestedHarness
+    : defaultHarnessId();
+  const harness = getHarness(harnessId);
+  if (!harness?.available) {
+    throw new Error(`Harness "${harnessId}" is not available on this Mac. Install Codex or Claude Code.`);
+  }
+
+  const id = `${harnessId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const session = {
     id,
+    harnessId,
     message,
     workspace,
     status: "running",
@@ -276,9 +343,35 @@ function createSession(message, workspaceId) {
   addEvent(session, {
     type: "status",
     status: "starting",
-    text: "Starting Codex on this Mac..."
+    harness: harnessId,
+    text: `Starting ${harness.label} on this Mac...`
   });
 
+  const spawner = harnessId === "claude-code" ? spawnClaudeCode : spawnCodex;
+  const child = spawner(session);
+  session.child = child;
+
+  child.on("error", (error) => {
+    session.status = "failed";
+    addEvent(session, { type: "error", text: error.message });
+  });
+
+  child.on("close", (code) => {
+    if (session._flushStdout) session._flushStdout();
+    session.exitCode = code;
+    session.status = code === 0 ? "completed" : "failed";
+    addEvent(session, {
+      type: "done",
+      status: session.status,
+      exitCode: code,
+      text: code === 0 ? `${harness.label} session completed.` : `${harness.label} exited with code ${code}.`
+    });
+  });
+
+  return session;
+}
+
+function spawnCodex(session) {
   const args = [
     "exec",
     "--json",
@@ -286,8 +379,8 @@ function createSession(message, workspaceId) {
     "workspace-write",
     "--skip-git-repo-check",
     "-C",
-    workspace.path,
-    message
+    session.workspace.path,
+    session.message
   ];
 
   addEvent(session, {
@@ -296,12 +389,10 @@ function createSession(message, workspaceId) {
   });
 
   const child = spawn(CODEX_BIN, args, {
-    cwd: workspace.path,
+    cwd: session.workspace.path,
     env: { ...process.env, NO_COLOR: "1" },
     stdio: ["ignore", "pipe", "pipe"]
   });
-
-  session.child = child;
 
   let stdoutBuffer = "";
   child.stdout.on("data", (chunk) => {
@@ -322,26 +413,217 @@ function createSession(message, workspaceId) {
     addEvent(session, { type: "stderr", text: chunk.toString() });
   });
 
-  child.on("error", (error) => {
-    session.status = "failed";
-    addEvent(session, { type: "error", text: error.message });
-  });
-
-  child.on("close", (code) => {
+  session._flushStdout = () => {
     if (stdoutBuffer.trim()) {
       addEvent(session, { type: "stdout", text: stdoutBuffer.trim() });
+      stdoutBuffer = "";
     }
-    session.exitCode = code;
-    session.status = code === 0 ? "completed" : "failed";
-    addEvent(session, {
-      type: "done",
-      status: session.status,
-      exitCode: code,
-      text: code === 0 ? "Codex session completed." : `Codex exited with code ${code}.`
-    });
+  };
+
+  return child;
+}
+
+function spawnClaudeCode(session) {
+  // --permission-mode acceptEdits auto-allows file writes + safe filesystem commands.
+  // --allowedTools "Bash" extends that to arbitrary shell, matching Codex's workspace-write scope.
+  // --add-dir ensures the workspace is in the allowed-roots set for fresh phone-created folders.
+  const args = [
+    "-p",
+    session.message,
+    "--output-format", "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    "--permission-mode", "acceptEdits",
+    "--allowedTools", "Bash,WebFetch",
+    "--add-dir", session.workspace.path
+  ];
+
+  addEvent(session, {
+    type: "command",
+    text: `${CLAUDE_BIN} ${args.map((arg) => (arg.includes(" ") ? JSON.stringify(arg) : arg)).join(" ")}`
   });
 
-  return session;
+  const child = spawn(CLAUDE_BIN, args, {
+    cwd: session.workspace.path,
+    env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+
+  let stdoutBuffer = "";
+  // Accumulator for streaming text deltas so we can re-emit consolidated messages
+  // on partial-message boundaries (better UX than per-token chips).
+  const deltaState = { text: "", messageId: null };
+
+  function flushDelta() {
+    if (deltaState.text.trim()) {
+      addEvent(session, { type: "claude", kind: "message", text: deltaState.text, messageId: deltaState.messageId });
+    }
+    deltaState.text = "";
+    deltaState.messageId = null;
+  }
+
+  child.stdout.on("data", (chunk) => {
+    stdoutBuffer += chunk.toString();
+    const lines = stdoutBuffer.split(/\r?\n/);
+    stdoutBuffer = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        handleClaudeLine(session, JSON.parse(line), deltaState, flushDelta);
+      } catch {
+        addEvent(session, { type: "stdout", text: line });
+      }
+    }
+  });
+
+  child.stderr.on("data", (chunk) => {
+    addEvent(session, { type: "stderr", text: chunk.toString() });
+  });
+
+  session._flushStdout = () => {
+    flushDelta();
+    if (stdoutBuffer.trim()) {
+      addEvent(session, { type: "stdout", text: stdoutBuffer.trim() });
+      stdoutBuffer = "";
+    }
+  };
+
+  return child;
+}
+
+function handleClaudeLine(session, payload, deltaState, flushDelta) {
+  // Claude stream-json schema: every line is a typed event.
+  // We normalize into { type: "claude", kind: ..., ... } shapes the PWA understands.
+  // Drop internal lifecycle noise that has no UI meaning.
+  if (payload.type === "system" && ["hook_started", "hook_response", "status", "plugin_install"].includes(payload.subtype)) {
+    return;
+  }
+
+  if (payload.type === "system" && payload.subtype === "init") {
+    addEvent(session, {
+      type: "claude",
+      kind: "thread_start",
+      sessionId: payload.session_id,
+      model: payload.model,
+      tools: payload.tools
+    });
+    return;
+  }
+
+  if (payload.type === "system" && payload.subtype === "api_retry") {
+    addEvent(session, {
+      type: "claude",
+      kind: "retry",
+      attempt: payload.attempt,
+      maxRetries: payload.max_retries,
+      retryDelayMs: payload.retry_delay_ms,
+      error: payload.error
+    });
+    return;
+  }
+
+  if (payload.type === "stream_event") {
+    const event = payload.event || {};
+    // Text deltas come through repeatedly; accumulate and emit on message_stop.
+    if (event.type === "content_block_delta" && event.delta?.type === "text_delta" && event.delta.text) {
+      deltaState.text += event.delta.text;
+      return;
+    }
+    if (event.type === "message_stop") {
+      flushDelta();
+      return;
+    }
+    return;
+  }
+
+  if (payload.type === "assistant") {
+    flushDelta();
+    const blocks = payload.message?.content || [];
+    for (const block of blocks) {
+      if (block.type === "tool_use") {
+        const inputPreview = previewToolInput(block.name, block.input);
+        addEvent(session, {
+          type: "claude",
+          kind: "tool_use",
+          toolName: block.name,
+          toolUseId: block.id,
+          input: inputPreview
+        });
+        // Surface Edit/Write/MultiEdit as file changes too so they show up in the files tab.
+        const filePath = block.input?.file_path || block.input?.path;
+        if (filePath && ["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(block.name)) {
+          addEvent(session, {
+            type: "claude",
+            kind: "file_change",
+            path: filePath,
+            changeKind: block.name.toLowerCase()
+          });
+        }
+      } else if (block.type === "text" && block.text) {
+        // Non-streaming text (rare with --include-partial-messages but possible)
+        addEvent(session, { type: "claude", kind: "message", text: block.text });
+      }
+    }
+    return;
+  }
+
+  if (payload.type === "user") {
+    const blocks = payload.message?.content || [];
+    for (const block of blocks) {
+      if (block.type === "tool_result") {
+        const content = block.content;
+        const text = typeof content === "string"
+          ? content
+          : Array.isArray(content)
+            ? content.map((c) => c.text || "").join("\n")
+            : JSON.stringify(content);
+        addEvent(session, {
+          type: "claude",
+          kind: "tool_result",
+          toolUseId: block.tool_use_id,
+          output: text.slice(0, 4000),
+          isError: !!block.is_error
+        });
+      }
+    }
+    return;
+  }
+
+  if (payload.type === "result") {
+    flushDelta();
+    addEvent(session, {
+      type: "claude",
+      kind: "result",
+      result: payload.result || "",
+      isError: !!payload.is_error,
+      durationMs: payload.duration_ms,
+      numTurns: payload.num_turns,
+      totalCostUsd: payload.total_cost_usd,
+      usage: payload.usage
+    });
+    return;
+  }
+
+  // Unknown event type — keep raw for debugging.
+  addEvent(session, { type: "claude", kind: "unknown", payload });
+}
+
+function previewToolInput(toolName, input) {
+  if (!input) return "";
+  // Compact, human-readable preview for the actions tab.
+  if (toolName === "Bash" && input.command) return input.command;
+  if ((toolName === "Edit" || toolName === "MultiEdit") && input.file_path) return input.file_path;
+  if (toolName === "Write" && input.file_path) return input.file_path;
+  if (toolName === "Read" && input.file_path) return input.file_path;
+  if (toolName === "Glob" && input.pattern) return input.pattern;
+  if (toolName === "Grep" && input.pattern) return `${input.pattern}${input.path ? ` in ${input.path}` : ""}`;
+  if (toolName === "WebFetch" && input.url) return input.url;
+  try {
+    const json = JSON.stringify(input);
+    return json.length > 200 ? `${json.slice(0, 200)}...` : json;
+  } catch {
+    return String(input);
+  }
 }
 
 function serveStatic(req, res) {
@@ -388,6 +670,9 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       daemon: "loupe-mac-daemon",
       codexBin: CODEX_BIN,
+      claudeBin: CLAUDE_BIN,
+      harnesses: harnessRegistry,
+      defaultHarness: defaultHarnessId(),
       cwd: ROOT,
       sessions: sessions.size,
       urls: getNetworkUrls(),
@@ -427,7 +712,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === "POST" && url.pathname === "/api/codex/start") {
+  // New unified endpoint — body: { message, workspaceId, harness }
+  // /api/codex/start kept below as alias for any cached PWA clients still in flight.
+  if (req.method === "POST" && (url.pathname === "/api/sessions/start" || url.pathname === "/api/codex/start")) {
     try {
       const body = JSON.parse(await readBody(req) || "{}");
       const message = String(body.message || "").trim();
@@ -435,11 +722,12 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { ok: false, error: "Message is required." });
         return;
       }
-      const session = createSession(message, body.workspaceId);
+      const session = createSession(message, body.workspaceId, body.harness);
       sendJson(res, 200, {
         ok: true,
         sessionId: session.id,
         status: session.status,
+        harness: session.harnessId,
         workspace: session.workspace
       });
     } catch (error) {
@@ -448,7 +736,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === "GET" && url.pathname.startsWith("/api/codex/events/")) {
+  if (req.method === "GET" && (url.pathname.startsWith("/api/sessions/events/") || url.pathname.startsWith("/api/codex/events/"))) {
     const id = url.pathname.split("/").pop();
     const session = sessions.get(id);
     if (!session) {
@@ -474,6 +762,13 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`Loupe Mac daemon listening on http://${HOST}:${PORT}`);
+  console.log("Harnesses detected:");
+  for (const harness of harnessRegistry) {
+    const status = harness.available ? `OK   (${harness.version || "version unknown"})` : "MISSING";
+    console.log(`  ${harness.id.padEnd(12)} ${status}`);
+    if (harness.bin) console.log(`               ${harness.bin}`);
+  }
+  console.log(`Default harness: ${defaultHarnessId()}`);
   console.log("Open from this Mac or iPhone:");
   for (const url of getNetworkUrls()) {
     console.log(`  ${url}`);

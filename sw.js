@@ -1,10 +1,9 @@
-const CACHE_NAME = "loupe-demo-v9";
+const CACHE_NAME = "loupe-demo-v10";
 const ASSETS = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./sw.js",
-  "./daemon.js",
   "./icons/app-icon.svg"
 ];
 
