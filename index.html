@@ -263,67 +263,6 @@
       line-height: 1.55;
     }
 
-    .usage-strip {
-      width: min(520px, 100%);
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
-    }
-
-    .usage-card {
-      min-width: 0;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: rgba(14, 16, 20, 0.78);
-      padding: 11px 12px;
-      text-align: left;
-    }
-
-    .usage-top {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 8px;
-      margin-bottom: 8px;
-      font-family: var(--mono);
-      font-size: 11px;
-    }
-
-    .usage-label {
-      color: var(--muted);
-    }
-
-    .usage-reset {
-      color: var(--dim);
-      white-space: nowrap;
-    }
-
-    .usage-value {
-      color: var(--text);
-      font-family: var(--mono);
-      font-size: 22px;
-      font-weight: 780;
-      line-height: 1;
-    }
-
-    .usage-bar {
-      height: 5px;
-      margin-top: 10px;
-      overflow: hidden;
-      border-radius: 999px;
-      background: var(--panel-3);
-    }
-
-    .usage-fill {
-      width: var(--usage-left, 0%);
-      height: 100%;
-      border-radius: inherit;
-      background: var(--green);
-    }
-
-    .usage-card.low .usage-fill { background: var(--red); }
-    .usage-card.medium .usage-fill { background: var(--yellow); }
-
     .workspace-tools {
       width: min(720px, 100%);
       border: 1px solid var(--line);
@@ -464,7 +403,8 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 11px;
+      min-height: 28px;
+      padding: 4px 10px;
       border: 1px solid var(--line-hot);
       border-radius: 999px;
       background: var(--panel-2);
@@ -496,6 +436,47 @@
 
     .harness-pill.active .dot { background: var(--yellow); }
     .harness-pill.unavailable .dot { background: var(--red); }
+
+    .harness-name {
+      white-space: nowrap;
+    }
+
+    .harness-usage {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 66px;
+      padding-left: 6px;
+      margin-left: 2px;
+      border-left: 1px solid var(--line);
+      color: var(--dim);
+      white-space: nowrap;
+    }
+
+    .harness-usage-value {
+      min-width: 24px;
+      color: var(--text);
+      text-align: right;
+    }
+
+    .harness-usage-bar {
+      width: 24px;
+      height: 4px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--panel-3);
+    }
+
+    .harness-usage-fill {
+      width: var(--usage-left, 0%);
+      height: 100%;
+      border-radius: inherit;
+      background: var(--green);
+    }
+
+    .harness-usage.low .harness-usage-fill { background: var(--red); }
+    .harness-usage.medium .harness-usage-fill { background: var(--yellow); }
+    .harness-usage.unknown .harness-usage-value { color: var(--dim); }
 
     textarea {
       width: 100%;
@@ -916,8 +897,7 @@
       }
 
       .composer-inner,
-      .fs-actions,
-      .usage-strip {
+      .fs-actions {
         grid-template-columns: 1fr;
       }
 
@@ -966,8 +946,6 @@
           </span>
         </h2>
         <p class="hero-copy" id="workspacePath">Waiting for Mac daemon...</p>
-        <section class="usage-strip" id="usageStrip" aria-label="Codex usage left" hidden></section>
-
         <details class="workspace-tools">
           <summary>workspace tools</summary>
           <section class="fs-panel" aria-label="Create workspace">
@@ -1104,35 +1082,43 @@
       return "";
     }
 
-    function renderUsage() {
-      const strip = $("#usageStrip");
-      const rateLimits = state.health?.codexUsage?.rateLimits;
-      const windows = [
-        { label: "5h left", data: rateLimits?.primary },
-        { label: "weekly left", data: rateLimits?.secondary }
-      ].filter((item) => item.data);
+    function rateLimitForHarness(harnessId) {
+      if (harnessId === "codex") return state.health?.codexUsage?.rateLimits?.primary || null;
+      if (harnessId === "claude-code") return state.health?.claudeUsage?.rateLimits?.primary || null;
+      return null;
+    }
 
-      if (!windows.length) {
-        strip.hidden = true;
-        strip.innerHTML = "";
-        return;
+    function usageSummaryForHarness(harnessId) {
+      const rateLimit = rateLimitForHarness(harnessId);
+      if (!rateLimit) {
+        return {
+          label: "5h n/a",
+          title: "5h usage left unavailable",
+          className: "unknown",
+          style: "--usage-left: 0%"
+        };
       }
 
-      strip.hidden = false;
-      strip.innerHTML = windows.map((item) => {
-        const used = Math.max(0, Math.min(100, Number(item.data.used_percent) || 0));
-        const left = Math.max(0, Math.round(100 - used));
-        return `
-          <article class="usage-card ${usageClass(left)}" style="--usage-left: ${left}%">
-            <div class="usage-top">
-              <span class="usage-label">${escapeHtml(item.label)}</span>
-              <span class="usage-reset">${escapeHtml(formatReset(item.data.resets_at))}</span>
-            </div>
-            <div class="usage-value">${left}%</div>
-            <div class="usage-bar" aria-hidden="true"><div class="usage-fill"></div></div>
-          </article>
-        `;
-      }).join("");
+      const used = Math.max(0, Math.min(100, Number(rateLimit.used_percent) || 0));
+      const left = Math.max(0, Math.round(100 - used));
+      const reset = formatReset(rateLimit.resets_at);
+      return {
+        label: `5h ${left}%`,
+        title: `5h usage left: ${left}% · ${reset}`,
+        className: usageClass(left),
+        style: `--usage-left: ${left}%`
+      };
+    }
+
+    function renderHarnessUsage(harnessId) {
+      const usage = usageSummaryForHarness(harnessId);
+      const classes = ["harness-usage", usage.className].filter(Boolean).join(" ");
+      return `
+        <span class="${classes}" style="${escapeHtml(usage.style)}" aria-label="${escapeHtml(usage.title)}">
+          <span class="harness-usage-value">${escapeHtml(usage.label)}</span>
+          <span class="harness-usage-bar" aria-hidden="true"><span class="harness-usage-fill"></span></span>
+        </span>
+      `;
     }
 
     function shortPrompt(prompt) {
@@ -1386,7 +1372,6 @@
         select.innerHTML = `<option>Offline</option>`;
         $("#workspacePath").textContent = "Run node daemon.js on the Mac";
         $("#phoneUrl").textContent = "Open from iPhone: unavailable";
-        renderUsage();
         renderHarnesses();
         setRunning(false);
         return;
@@ -1404,7 +1389,6 @@
       $("#workspacePath").textContent = selected ? selected.path : health.cwd;
       const phoneUrl = (health.urls || []).find((url) => !url.includes("localhost")) || location.href;
       $("#phoneUrl").textContent = `Open from iPhone: ${phoneUrl}`;
-      renderUsage();
       renderHarnesses();
       setRunning(state.running);
     }
@@ -1427,10 +1411,11 @@
         const classes = ["harness-pill"];
         if (harness.id === state.harnessId) classes.push("active");
         if (!harness.available) classes.push("unavailable");
+        const usage = usageSummaryForHarness(harness.id);
         const title = harness.available
-          ? (harness.version || harness.bin || harness.label)
+          ? `${harness.version || harness.bin || harness.label} · ${usage.title}`
           : `Not installed${harness.bin ? ` (looked for ${harness.bin})` : ""}`;
-        return `<button type="button" class="${classes.join(" ")}" data-harness="${escapeHtml(harness.id)}" ${harness.available ? "" : "disabled"} title="${escapeHtml(title)}"><span class="dot"></span>${escapeHtml(harness.label)}</button>`;
+        return `<button type="button" class="${classes.join(" ")}" data-harness="${escapeHtml(harness.id)}" ${harness.available ? "" : "disabled"} title="${escapeHtml(title)}"><span class="dot"></span><span class="harness-name">${escapeHtml(harness.label)}</span>${renderHarnessUsage(harness.id)}</button>`;
       }).join("");
 
       row.innerHTML = `<span class="harness-label">agent</span>${pills}`;

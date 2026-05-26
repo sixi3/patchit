@@ -13,6 +13,8 @@ const CLAUDE_BIN = process.env.CLAUDE_BIN || findClaudeBin();
 const WORKSPACE_STORE = path.join(ROOT, ".loupe-workspaces.json");
 const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 const CODEX_SESSIONS_DIR = path.join(CODEX_HOME, "sessions");
+const CLAUDE_HOME = process.env.CLAUDE_HOME || path.join(os.homedir(), ".claude");
+const CLAUDE_PROJECTS_DIR = path.join(CLAUDE_HOME, "projects");
 const LOUPE_HOME = process.env.LOUPE_HOME || path.join(os.homedir(), ".loupe");
 const CONFIG_FILE = path.join(LOUPE_HOME, "config.json");
 
@@ -377,7 +379,15 @@ function readLastRateLimitSnapshot(filePath) {
 }
 
 function getCodexUsage() {
-  const files = listJsonlFiles(CODEX_SESSIONS_DIR)
+  return getUsageSnapshot(CODEX_SESSIONS_DIR);
+}
+
+function getClaudeUsage() {
+  return getUsageSnapshot(CLAUDE_PROJECTS_DIR);
+}
+
+function getUsageSnapshot(rootDir) {
+  const files = listJsonlFiles(rootDir)
     .map((filePath) => {
       try {
         return { path: filePath, mtimeMs: fs.statSync(filePath).mtimeMs };
@@ -980,6 +990,7 @@ const server = http.createServer(async (req, res) => {
       workspaceBindings: listWorkspaceBindings(),
       fsRoots: getFsRoots(),
       codexUsage: getCodexUsage(),
+      claudeUsage: getClaudeUsage(),
       recentRequests,
       config: configSummary()
     });
