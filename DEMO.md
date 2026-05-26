@@ -85,16 +85,56 @@ Alternative paths:
 - Deploy the folder to Vercel/Netlify/Cloudflare Pages.
 - Use an HTTPS tunnel such as ngrok.
 
-## Suggested demo script
+## End-to-end demo script: ticket → agent → PR
 
-1. Open the app on iPhone.
-2. Confirm the top-right status says `online`.
-3. Pick a workspace in `Let's get building in ...`.
-4. Enter a custom message in the thick bottom chatbox.
-5. Tap send.
-6. Tap the session container at the top of the screen.
-7. Review `messages`, `files`, and `actions`.
-8. Optional: expand `workspace tools` to create a new Mac folder/workspace.
+Prereqs (one-time):
+- Codex signed in (`codex` once) **or** Claude Code signed in (`claude /login` once).
+- A GitHub personal access token with `repo` scope.
+- At least one of your workspaces is a git checkout with a `github.com` origin remote.
+
+Flow:
+1. Open the app on iPhone (PWA installed via Add to Home Screen).
+2. Confirm the top-right `daemon` pill says `online`.
+3. Tap **inbox** in the topbar.
+4. First time only: paste your GitHub token. The token is stored at
+   `~/.loupe/config.json` on the Mac (mode 0600) and never travels to the
+   phone after submission.
+5. See assigned issues and PRs awaiting your review across every repo
+   the token can see. Each card shows which Mac workspace it's bound to
+   (green tag) or `no workspace` (red tag).
+6. Tap an issue assigned to you in a bound repo. The composer fills with
+   a structured dispatch brief and the workspace selector auto-switches.
+7. Pick a harness (codex / claude code) in the composer's agent row.
+8. Tap send. The daemon:
+   - Verifies the workspace is a git repo with a clean tree.
+   - Checks out a fresh `loupe/<repo>-<issue>-<id>` branch from your
+     current HEAD.
+   - Spawns the chosen agent with the workspace as cwd.
+   - Streams every tool call, file change, and message back to the phone
+     in real time.
+   - When the agent finishes successfully **with changes**: stages,
+     commits with the ticket title + URL trailer, pushes the branch, and
+     emits a `pr_ready` event with the GitHub compare URL.
+9. Tap the green **open PR draft on GitHub ↗** card in the messages tab.
+   On iPhone this deep-links into the GitHub Mobile app's
+   "Open a pull request" sheet, pre-filled from your commit.
+10. Review on phone, hit **Create pull request**, then approve + merge
+    when you're ready.
+
+Reviews:
+- Tickets in the **PRs awaiting your review** section dispatch in plain
+  mode (no branch, no push). The brief asks the agent to summarize,
+  flag risks, and suggest follow-ups without touching files.
+
+Graceful degradations:
+- Workspace not bound to GitHub → runs in plain free-form mode, no
+  branch created, no warning surface clutter.
+- Workspace has uncommitted changes → branch creation is skipped and a
+  `branch:skipped` event explains why; the agent still runs in place.
+- Agent finishes with no diff → branch is deleted and a `no_changes`
+  event is shown.
+- `git push` fails (no remote auth, etc.) → `push_failed` event includes
+  the exact retry command.
 
 ## Filesystem access notes
 
