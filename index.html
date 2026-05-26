@@ -825,6 +825,31 @@
       overflow-wrap: anywhere;
     }
 
+    .item.pr-ready {
+      border-color: rgba(126, 231, 135, 0.5);
+      background: linear-gradient(180deg, rgba(126, 231, 135, 0.08), rgba(126, 231, 135, 0.02));
+    }
+
+    .item.pr-ready .item-head { color: var(--green); }
+
+    .pr-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 14px;
+      border: 1px solid rgba(126, 231, 135, 0.55);
+      border-radius: 8px;
+      background: rgba(126, 231, 135, 0.12);
+      color: var(--green);
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 700;
+      text-decoration: none;
+      align-self: flex-start;
+    }
+
+    .pr-link:active { background: rgba(126, 231, 135, 0.22); }
+
     .empty {
       color: var(--muted);
       border: 1px dashed var(--line);
@@ -1184,12 +1209,23 @@
       });
 
       if (state.activeSessionTab === "messages") {
-        renderItems(session.messages, (item) => `
-          <article class="item">
-            <div class="item-head"><span>${escapeHtml(item.label)}</span><span>${escapeHtml(item.at)}</span></div>
-            <div class="item-body">${escapeHtml(item.body)}</div>
-          </article>
-        `, "No messages yet.");
+        renderItems(session.messages, (item) => {
+          if (item.role === "pr" && item.url) {
+            return `
+              <article class="item pr-ready">
+                <div class="item-head"><span>${escapeHtml(item.label)}</span><span>${escapeHtml(item.at)}</span></div>
+                <div class="item-body">${escapeHtml(item.body)}</div>
+                <a class="pr-link" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">open PR draft on GitHub ↗</a>
+              </article>
+            `;
+          }
+          return `
+            <article class="item">
+              <div class="item-head"><span>${escapeHtml(item.label)}</span><span>${escapeHtml(item.at)}</span></div>
+              <div class="item-body">${escapeHtml(item.body)}</div>
+            </article>
+          `;
+        }, "No messages yet.");
       }
 
       if (state.activeSessionTab === "files") {
@@ -1265,6 +1301,31 @@
             command: `input ${payload.usage.input_tokens}, output ${payload.usage.output_tokens}`,
             at
           });
+        }
+      } else if (event.type === "branch") {
+        // Branch / PR loop lifecycle events. Surface in the messages tab so they
+        // sit next to the agent's natural language output.
+        const ctx = event.branch ? ` · ${event.branch}` : "";
+        if (event.kind === "created") {
+          session.messages.push({ role: "system", label: "branch", body: event.text || `Branched ${event.branch}`, at });
+          session.branch = { name: event.branch, base: event.base, repo: event.repo };
+        } else if (event.kind === "committed") {
+          session.messages.push({ role: "system", label: "commit", body: `${event.subject} (${(event.sha || "").slice(0, 7)})${ctx}`, at });
+        } else if (event.kind === "pr_ready") {
+          session.prReady = {
+            url: event.compareUrl,
+            branch: event.branch,
+            base: event.base,
+            repo: event.repo,
+            sha: event.sha
+          };
+          session.messages.push({ role: "pr", label: "pr ready", body: event.text || "PR ready", url: event.compareUrl, at });
+        } else if (event.kind === "no_changes") {
+          session.messages.push({ role: "system", label: "no changes", body: event.text || "Agent made no changes.", at });
+        } else if (event.kind === "skipped") {
+          session.messages.push({ role: "system", label: "branch", body: event.text || "Branch mode skipped.", at });
+        } else if (event.kind === "push_failed" || event.kind === "error") {
+          session.messages.push({ role: "system", label: event.kind, body: event.text || "Branch step failed.", at });
         }
       } else if (event.type === "claude") {
         if (event.kind === "thread_start") {
@@ -1460,11 +1521,13 @@
       renderSessions();
       openSession(session.localId);
 
+      const dispatch = state.pendingDispatch || null;
+      state.pendingDispatch = null;
       try {
         const response = await fetch("/api/sessions/start", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ message, workspaceId: state.workspaceId, harness: harnessId })
+          body: JSON.stringify({ message, workspaceId: state.workspaceId, harness: harnessId, dispatch })
         });
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || `Could not start ${harness.label}`);
@@ -1472,8 +1535,10 @@
         session.remoteId = data.sessionId;
         session.workspace = data.workspace || session.workspace;
         session.status = "running";
-        $("#sessionHint").textContent = `${data.sessionId} · ${harness.label} · ${data.workspace?.name || "workspace"}`;
-        toast(`${harness.label} started on your Mac.`);
+        session.dispatch = dispatch;
+        session.branch = data.branch || null;
+        $("#sessionHint").textContent = `${data.sessionId} · ${harness.label} · ${data.workspace?.name || "workspace"}${data.branch ? ` · ${data.branch.name}` : ""}`;
+        toast(`${harness.label} started${data.branch ? ` on ${data.branch.name}` : ""}.`);
         renderSessions();
         renderSessionView();
 
@@ -1655,9 +1720,14 @@
         `---\n` +
         (ticket.kind === "review"
           ? `Review this pull request. Summarize what it changes, flag risks, and suggest follow-ups. Do not modify files.`
-          : `Implement the change described above. When done, summarize what you did and list every file you touched. Do not push or open a PR yet.`);
-      // Auto-pick the bound workspace if one exists.
+          : `Implement the change described above. When done, summarize what you did and list every file you touched. The daemon will commit + push the branch and open a PR draft automatically — do not run git yourself.`);
       if (ticket.binding?.workspaceId) state.workspaceId = ticket.binding.workspaceId;
+      // Attach the ticket as the dispatch context — startSession reads this and
+      // forwards it so the daemon can name the branch + commit accordingly.
+      state.pendingDispatch = {
+        mode: ticket.kind === "review" ? "plain" : "branch",
+        ticket: { kind: ticket.kind, repo: ticket.repo, number: ticket.number, title: ticket.title, url: ticket.url }
+      };
       renderHealth();
       closeInbox();
       toast(ticket.binding ? `Loaded ${ticket.repo}#${ticket.number} in ${ticket.binding.workspacePath.split("/").pop()}` : `Loaded ${ticket.repo}#${ticket.number}. Pick a workspace.`);

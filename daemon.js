@@ -473,7 +473,7 @@ function addEvent(session, event) {
   }
 }
 
-function createSession(message, workspaceId, requestedHarness) {
+function createSession(message, workspaceId, requestedHarness, dispatch) {
   const workspace = resolveWorkspace(workspaceId);
   const harnessId = (requestedHarness && getHarness(requestedHarness)?.available)
     ? requestedHarness
@@ -489,11 +489,13 @@ function createSession(message, workspaceId, requestedHarness) {
     harnessId,
     message,
     workspace,
+    dispatch: dispatch || null, // { ticket: {repo, number, title, url, kind}, mode: "branch"|"plain" } | null
     status: "running",
     events: [],
     clients: new Set(),
     startedAt: new Date().toISOString(),
-    exitCode: null
+    exitCode: null,
+    branch: null // populated by setupBranchIfApplicable when branch mode triggers
   };
   sessions.set(id, session);
 
@@ -503,6 +505,13 @@ function createSession(message, workspaceId, requestedHarness) {
     harness: harnessId,
     text: `Starting ${harness.label} on this Mac...`
   });
+
+  // Auto-engage branch mode when the workspace is bound to a GitHub repo,
+  // unless the caller explicitly opted out with dispatch.mode = "plain".
+  const wantsBranch = (!session.dispatch || session.dispatch.mode !== "plain");
+  if (wantsBranch) {
+    setupBranchIfApplicable(session);
+  }
 
   const spawner = harnessId === "claude-code" ? spawnClaudeCode : spawnCodex;
   const child = spawner(session);
@@ -523,9 +532,143 @@ function createSession(message, workspaceId, requestedHarness) {
       exitCode: code,
       text: code === 0 ? `${harness.label} session completed.` : `${harness.label} exited with code ${code}.`
     });
+    // After the agent stops, push the branch (if any) and surface the PR URL.
+    if (session.branch && code === 0) {
+      finalizeBranch(session).catch((error) => {
+        addEvent(session, { type: "branch", kind: "error", text: `Could not finalize PR: ${error.message}` });
+      });
+    }
   });
 
   return session;
+}
+
+// ---------- Git branch / PR loop ----------
+
+function gitRun(cwd, args, { timeout = 15_000 } = {}) {
+  return spawnSync("git", ["-C", cwd, ...args], { timeout, encoding: "utf8" });
+}
+
+function setupBranchIfApplicable(session) {
+  const binding = workspaceRepoBinding(session.workspace);
+  if (!binding) {
+    // Not a GitHub-bound repo: stay in plain mode silently.
+    return;
+  }
+
+  // Require a clean tree before we branch. Surface a clear event if dirty
+  // so the user understands why the PR loop didn't engage.
+  const status = gitRun(session.workspace.path, ["status", "--porcelain"]);
+  if (status.status !== 0) {
+    addEvent(session, { type: "branch", kind: "skipped", text: "Could not read git status; skipping branch mode." });
+    return;
+  }
+  if (status.stdout.trim()) {
+    addEvent(session, {
+      type: "branch",
+      kind: "skipped",
+      text: "Workspace has uncommitted changes; running in plain mode. Commit or stash, then dispatch again to get the PR loop."
+    });
+    return;
+  }
+
+  // Capture base branch so we can build the compare URL later.
+  const head = gitRun(session.workspace.path, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (head.status !== 0) {
+    addEvent(session, { type: "branch", kind: "skipped", text: "Could not read current branch; skipping branch mode." });
+    return;
+  }
+  const baseBranch = head.stdout.trim();
+
+  // Branch name: loupe/<ticket-slug-or-task-id>. Keep it short and uniqueness-safe.
+  const slug = session.dispatch?.ticket
+    ? `${session.dispatch.ticket.repo.split("/")[1]}-${session.dispatch.ticket.number}-${session.id.split("-").slice(-1)[0]}`
+    : `task-${session.id.split("-").slice(-2).join("-")}`;
+  const branchName = `loupe/${slug}`.toLowerCase().replace(/[^a-z0-9/_-]+/g, "-");
+
+  const checkout = gitRun(session.workspace.path, ["checkout", "-b", branchName]);
+  if (checkout.status !== 0) {
+    addEvent(session, {
+      type: "branch",
+      kind: "error",
+      text: `Could not create branch ${branchName}: ${(checkout.stderr || "").trim().slice(0, 300)}`
+    });
+    return;
+  }
+
+  session.branch = { name: branchName, base: baseBranch, binding };
+  addEvent(session, {
+    type: "branch",
+    kind: "created",
+    branch: branchName,
+    base: baseBranch,
+    repo: `${binding.owner}/${binding.repo}`,
+    text: `Branched ${branchName} from ${baseBranch}.`
+  });
+}
+
+async function finalizeBranch(session) {
+  const { name: branch, base, binding } = session.branch;
+  const cwd = session.workspace.path;
+
+  // 1. Stage everything the agent touched.
+  const add = gitRun(cwd, ["add", "-A"]);
+  if (add.status !== 0) {
+    throw new Error(`git add failed: ${(add.stderr || "").trim()}`);
+  }
+
+  // 2. Check whether anything actually changed. If not, abandon the branch
+  //    cleanly instead of pushing an empty branch.
+  const diff = gitRun(cwd, ["diff", "--cached", "--quiet"]);
+  if (diff.status === 0) {
+    addEvent(session, {
+      type: "branch",
+      kind: "no_changes",
+      branch,
+      text: `Agent finished but made no file changes. Branch ${branch} not pushed.`
+    });
+    // Switch back to base so the workspace is clean for the next dispatch.
+    gitRun(cwd, ["checkout", base]);
+    gitRun(cwd, ["branch", "-D", branch]);
+    return;
+  }
+
+  // 3. Commit. Subject line from the ticket / first message line.
+  const subject = (session.dispatch?.ticket?.title || session.message.split(/\r?\n/)[0] || "Loupe agent change").slice(0, 72);
+  const trailer = session.dispatch?.ticket?.url ? `\n\nRefs: ${session.dispatch.ticket.url}` : "";
+  const commitMsg = `loupe: ${subject}${trailer}\n\n[via ${session.harnessId} · session ${session.id}]`;
+  const commit = gitRun(cwd, ["commit", "-m", commitMsg]);
+  if (commit.status !== 0) {
+    throw new Error(`git commit failed: ${(commit.stderr || "").trim()}`);
+  }
+  const commitSha = gitRun(cwd, ["rev-parse", "HEAD"]).stdout.trim();
+  addEvent(session, { type: "branch", kind: "committed", branch, sha: commitSha, subject });
+
+  // 4. Push. This relies on the user's existing git credential helper.
+  const push = gitRun(cwd, ["push", "-u", "origin", branch], { timeout: 45_000 });
+  if (push.status !== 0) {
+    const reason = (push.stderr || push.stdout || "").trim().slice(0, 600);
+    addEvent(session, {
+      type: "branch",
+      kind: "push_failed",
+      branch,
+      text: `Pushed locally; remote push failed. Run \`git -C ${cwd} push -u origin ${branch}\` to retry.\n\n${reason}`
+    });
+    return;
+  }
+
+  // 5. Build the compare URL — opens GitHub's "Open a pull request" page on web/mobile.
+  const compareUrl = `https://${binding.host}/${binding.owner}/${binding.repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?expand=1`;
+  addEvent(session, {
+    type: "branch",
+    kind: "pr_ready",
+    branch,
+    base,
+    repo: `${binding.owner}/${binding.repo}`,
+    sha: commitSha,
+    compareUrl,
+    text: `Pushed ${branch} to ${binding.owner}/${binding.repo}. Tap to open the PR draft.`
+  });
 }
 
 function spawnCodex(session) {
@@ -921,8 +1064,8 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // New unified endpoint — body: { message, workspaceId, harness }
-  // /api/codex/start kept below as alias for any cached PWA clients still in flight.
+  // New unified endpoint — body: { message, workspaceId, harness, dispatch }
+  // /api/codex/start kept as alias for any cached PWA clients still in flight.
   if (req.method === "POST" && (url.pathname === "/api/sessions/start" || url.pathname === "/api/codex/start")) {
     try {
       const body = JSON.parse(await readBody(req) || "{}");
@@ -931,13 +1074,14 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { ok: false, error: "Message is required." });
         return;
       }
-      const session = createSession(message, body.workspaceId, body.harness);
+      const session = createSession(message, body.workspaceId, body.harness, body.dispatch);
       sendJson(res, 200, {
         ok: true,
         sessionId: session.id,
         status: session.status,
         harness: session.harnessId,
-        workspace: session.workspace
+        workspace: session.workspace,
+        branch: session.branch ? { name: session.branch.name, base: session.branch.base, repo: `${session.branch.binding.owner}/${session.branch.binding.repo}` } : null
       });
     } catch (error) {
       sendJson(res, 500, { ok: false, error: error.message });
