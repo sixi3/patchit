@@ -1135,6 +1135,7 @@
         status: "starting",
         workspace,
         startedAt: now(),
+        eventCursor: 0,
         messages: [
           { role: "user", label: "you", body: prompt, at: now() }
         ],
@@ -1242,13 +1243,15 @@
     function setRunning(isRunning) {
       state.running = isRunning;
       $("#sendButton").disabled = isRunning;
-      $("#messageInput").disabled = isRunning;
       $("#daemonPill").className = `pill ${isRunning ? "running" : state.health?.ok ? "online" : "failed"}`;
       $("#daemonPillText").textContent = isRunning ? "running" : state.health?.ok ? "online" : "offline";
     }
 
     function handleAgentEvent(session, event) {
       const at = now();
+      if (typeof event.id === "number") {
+        session.eventCursor = Math.max(session.eventCursor || 0, event.id + 1);
+      }
       if (event.type === "status") {
         session.actions.push({ label: "status", status: event.status || "status", command: event.text, at });
       } else if (event.type === "command") {
@@ -1257,6 +1260,8 @@
         session.actions.push({ label: "error", status: "failed", command: event.text || "error", at });
       } else if (event.type === "stderr" || event.type === "stdout") {
         session.actions.push({ label: event.type, status: event.type, command: event.type, output: event.text, at });
+      } else if (event.type === "user_message") {
+        session.messages.push({ role: "user", label: "you", body: event.text || "", at });
       } else if (event.type === "done") {
         session.status = event.status || "completed";
         session.actions.push({ label: "done", status: session.status, command: event.text, at });
@@ -1523,34 +1528,77 @@
         session.dispatch = dispatch;
         session.branch = data.branch || null;
         $("#sessionHint").textContent = `${data.sessionId} · ${harness.label} · ${data.workspace?.name || "workspace"}${data.branch ? ` · ${data.branch.name}` : ""}`;
+        $("#messageInput").value = "";
         toast(`${harness.label} started${data.branch ? ` on ${data.branch.name}` : ""}.`);
         renderSessions();
         renderSessionView();
 
-        const source = new EventSource(`/api/sessions/events/${data.sessionId}`);
-        state.eventSource = source;
-        source.onmessage = (event) => {
-          const parsed = JSON.parse(event.data);
-          handleAgentEvent(session, parsed);
-          if (parsed.type === "done") {
-            source.close();
-            setRunning(false);
-          }
-        };
-        source.onerror = () => {
-          session.status = "failed";
-          session.actions.push({ label: "connection", status: "failed", command: "Event stream disconnected.", at: now() });
-          source.close();
-          setRunning(false);
-          renderSessions();
-          renderSessionView();
-        };
+        connectSessionEvents(session);
       } catch (error) {
         session.status = "failed";
         session.messages.push({ role: "system", label: "error", body: error.message, at: now() });
         setRunning(false);
         renderSessions();
         renderSessionView();
+      }
+    }
+
+    function connectSessionEvents(session) {
+      if (state.eventSource) state.eventSource.close();
+      const since = session.eventCursor || 0;
+      const source = new EventSource(`/api/sessions/events/${session.remoteId}?since=${since}`);
+      state.eventSource = source;
+      source.onmessage = (event) => {
+        const parsed = JSON.parse(event.data);
+        handleAgentEvent(session, parsed);
+        if (parsed.type === "done") {
+          source.close();
+          if (state.eventSource === source) state.eventSource = null;
+          setRunning(false);
+        }
+      };
+      source.onerror = () => {
+        session.status = "failed";
+        session.actions.push({ label: "connection", status: "failed", command: "Event stream disconnected.", at: now() });
+        source.close();
+        if (state.eventSource === source) state.eventSource = null;
+        setRunning(false);
+        renderSessions();
+        renderSessionView();
+      };
+    }
+
+    async function continueActiveSession(message) {
+      const session = activeSession();
+      if (!session?.remoteId || session.status === "running") {
+        return false;
+      }
+
+      session.messages.push({ role: "user", label: "you", body: message, at: now() });
+      session.status = "running";
+      setRunning(true);
+      renderSessions();
+      renderSessionView();
+
+      try {
+        const response = await fetch(`/api/sessions/${session.remoteId}/messages`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ message })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Could not continue session");
+        $("#messageInput").value = "";
+        $("#sessionHint").textContent = `${data.sessionId} · ${session.harnessLabel || data.harness} · ${data.workspace?.name || "workspace"}`;
+        connectSessionEvents(session);
+        return true;
+      } catch (error) {
+        session.status = "failed";
+        session.messages.push({ role: "system", label: "error", body: error.message, at: now() });
+        setRunning(false);
+        renderSessions();
+        renderSessionView();
+        return true;
       }
     }
 
@@ -1607,7 +1655,13 @@
         toast("Write a message first.");
         return;
       }
-      startSession(message);
+      if (state.running) {
+        toast("Wait for the current turn to finish.");
+        return;
+      }
+      continueActiveSession(message).then((handled) => {
+        if (!handled) startSession(message);
+      });
     });
 
     $("#harnessRow").addEventListener("click", (event) => {

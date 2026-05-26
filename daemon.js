@@ -476,11 +476,54 @@ function readBody(req) {
 }
 
 function addEvent(session, event) {
-  const enriched = { at: new Date().toISOString(), ...event };
+  const enriched = { id: session.nextEventId++, at: new Date().toISOString(), ...event };
   session.events.push(enriched);
   for (const res of session.clients) {
     res.write(`data: ${JSON.stringify(enriched)}\n\n`);
   }
+}
+
+function spawnSessionTurn(session, message, { resume = false } = {}) {
+  const harness = getHarness(session.harnessId);
+  session.message = message;
+  session.status = "running";
+
+  addEvent(session, {
+    type: "status",
+    status: resume ? "resuming" : "starting",
+    harness: session.harnessId,
+    text: `${resume ? "Resuming" : "Starting"} ${harness.label} on this Mac...`
+  });
+
+  const spawner = session.harnessId === "claude-code" ? spawnClaudeCode : spawnCodex;
+  const child = spawner(session, message, { resume });
+  session.child = child;
+
+  child.on("error", (error) => {
+    session.status = "failed";
+    addEvent(session, { type: "error", text: error.message });
+  });
+
+  child.on("close", (code) => {
+    if (session._flushStdout) session._flushStdout();
+    session.exitCode = code;
+    session.status = code === 0 ? "completed" : "failed";
+    session.child = null;
+    addEvent(session, {
+      type: "done",
+      status: session.status,
+      exitCode: code,
+      text: code === 0 ? `${harness.label} session completed.` : `${harness.label} exited with code ${code}.`
+    });
+    // After the agent stops, push the branch (if any) and surface the PR URL.
+    if (session.branch && code === 0) {
+      finalizeBranch(session).catch((error) => {
+        addEvent(session, { type: "branch", kind: "error", text: `Could not finalize PR: ${error.message}` });
+      });
+    }
+  });
+
+  return child;
 }
 
 function createSession(message, workspaceId, requestedHarness, dispatch) {
@@ -503,18 +546,14 @@ function createSession(message, workspaceId, requestedHarness, dispatch) {
     status: "running",
     events: [],
     clients: new Set(),
+    nextEventId: 0,
     startedAt: new Date().toISOString(),
     exitCode: null,
+    codexThreadId: null,
+    claudeSessionId: null,
     branch: null // populated by setupBranchIfApplicable when branch mode triggers
   };
   sessions.set(id, session);
-
-  addEvent(session, {
-    type: "status",
-    status: "starting",
-    harness: harnessId,
-    text: `Starting ${harness.label} on this Mac...`
-  });
 
   // Auto-engage branch mode when the workspace is bound to a GitHub repo,
   // unless the caller explicitly opted out with dispatch.mode = "plain".
@@ -523,33 +562,31 @@ function createSession(message, workspaceId, requestedHarness, dispatch) {
     setupBranchIfApplicable(session);
   }
 
-  const spawner = harnessId === "claude-code" ? spawnClaudeCode : spawnCodex;
-  const child = spawner(session);
-  session.child = child;
+  spawnSessionTurn(session, message);
 
-  child.on("error", (error) => {
-    session.status = "failed";
-    addEvent(session, { type: "error", text: error.message });
-  });
+  return session;
+}
 
-  child.on("close", (code) => {
-    if (session._flushStdout) session._flushStdout();
-    session.exitCode = code;
-    session.status = code === 0 ? "completed" : "failed";
-    addEvent(session, {
-      type: "done",
-      status: session.status,
-      exitCode: code,
-      text: code === 0 ? `${harness.label} session completed.` : `${harness.label} exited with code ${code}.`
-    });
-    // After the agent stops, push the branch (if any) and surface the PR URL.
-    if (session.branch && code === 0) {
-      finalizeBranch(session).catch((error) => {
-        addEvent(session, { type: "branch", kind: "error", text: `Could not finalize PR: ${error.message}` });
-      });
-    }
-  });
+function continueSession(id, message) {
+  const session = sessions.get(id);
+  if (!session) {
+    const error = new Error("Unknown session.");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (session.status === "running" || session.child) {
+    const error = new Error("Session is already running.");
+    error.statusCode = 409;
+    throw error;
+  }
+  if (session.harnessId === "codex" && !session.codexThreadId) {
+    throw new Error("Codex has not reported a resumable thread ID yet.");
+  }
+  if (session.harnessId === "claude-code" && !session.claudeSessionId) {
+    throw new Error("Claude Code has not reported a resumable session ID yet.");
+  }
 
+  spawnSessionTurn(session, message, { resume: true });
   return session;
 }
 
@@ -681,17 +718,26 @@ async function finalizeBranch(session) {
   });
 }
 
-function spawnCodex(session) {
-  const args = [
-    "exec",
-    "--json",
-    "--sandbox",
-    "workspace-write",
-    "--skip-git-repo-check",
-    "-C",
-    session.workspace.path,
-    session.message
-  ];
+function spawnCodex(session, message, { resume = false } = {}) {
+  const args = resume
+    ? [
+        "exec",
+        "resume",
+        "--json",
+        "--skip-git-repo-check",
+        session.codexThreadId,
+        message
+      ]
+    : [
+        "exec",
+        "--json",
+        "--sandbox",
+        "workspace-write",
+        "--skip-git-repo-check",
+        "-C",
+        session.workspace.path,
+        message
+      ];
 
   addEvent(session, {
     type: "command",
@@ -712,7 +758,11 @@ function spawnCodex(session) {
     for (const line of lines) {
       if (!line.trim()) continue;
       try {
-        addEvent(session, { type: "codex", payload: JSON.parse(line) });
+        const payload = JSON.parse(line);
+        if (payload.type === "thread.started" && payload.thread_id) {
+          session.codexThreadId = payload.thread_id;
+        }
+        addEvent(session, { type: "codex", payload });
       } catch {
         addEvent(session, { type: "stdout", text: line });
       }
@@ -733,13 +783,13 @@ function spawnCodex(session) {
   return child;
 }
 
-function spawnClaudeCode(session) {
+function spawnClaudeCode(session, message, { resume = false } = {}) {
   // --permission-mode acceptEdits auto-allows file writes + safe filesystem commands.
   // --allowedTools "Bash" extends that to arbitrary shell, matching Codex's workspace-write scope.
   // --add-dir ensures the workspace is in the allowed-roots set for fresh phone-created folders.
   const args = [
     "-p",
-    session.message,
+    message,
     "--output-format", "stream-json",
     "--verbose",
     "--include-partial-messages",
@@ -747,6 +797,9 @@ function spawnClaudeCode(session) {
     "--allowedTools", "Bash,WebFetch",
     "--add-dir", session.workspace.path
   ];
+  if (resume) {
+    args.push("--resume", session.claudeSessionId);
+  }
 
   addEvent(session, {
     type: "command",
@@ -810,6 +863,7 @@ function handleClaudeLine(session, payload, deltaState, flushDelta) {
   }
 
   if (payload.type === "system" && payload.subtype === "init") {
+    if (payload.session_id) session.claudeSessionId = payload.session_id;
     addEvent(session, {
       type: "claude",
       kind: "thread_start",
@@ -1100,6 +1154,30 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "POST" && url.pathname.match(/^\/api\/sessions\/[^/]+\/messages$/)) {
+    try {
+      const id = url.pathname.split("/")[3];
+      const body = JSON.parse(await readBody(req) || "{}");
+      const message = String(body.message || "").trim();
+      if (!message) {
+        sendJson(res, 400, { ok: false, error: "Message is required." });
+        return;
+      }
+      const session = continueSession(id, message);
+      sendJson(res, 200, {
+        ok: true,
+        sessionId: session.id,
+        status: session.status,
+        harness: session.harnessId,
+        workspace: session.workspace,
+        eventCount: session.events.length
+      });
+    } catch (error) {
+      sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
+    }
+    return;
+  }
+
   if (req.method === "GET" && (url.pathname.startsWith("/api/sessions/events/") || url.pathname.startsWith("/api/codex/events/"))) {
     const id = url.pathname.split("/").pop();
     const session = sessions.get(id);
@@ -1113,7 +1191,8 @@ const server = http.createServer(async (req, res) => {
       connection: "keep-alive",
       "access-control-allow-origin": "*"
     });
-    for (const event of session.events) {
+    const since = Math.max(0, Number(url.searchParams.get("since")) || 0);
+    for (const event of session.events.filter((item) => (item.id ?? 0) >= since)) {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     }
     session.clients.add(res);
