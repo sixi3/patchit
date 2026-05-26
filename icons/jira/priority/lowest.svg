@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" aria-label="Lowest priority">
+  <path d="M4 5 L12 13 L20 5" fill="none" stroke="#4598DF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M4 12 L12 20 L20 12" fill="none" stroke="#4598DF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

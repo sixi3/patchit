@@ -1,0 +1,280 @@
+{
+  "$comment": "Loupe ticket data model. Each field tagged with `source` (jira | loupe) and `tier` (L1 = on card, L2 = in detail view, L3 = deeper / search only). The `acceptanceCriteria` JIRA field is the highest-signal piece of agent context — Loupe prefers it over description prose when building the dispatch brief.",
+  "version": "0.1",
+
+  "jira_fields": {
+    "key":               { "type": "string",   "tier": "L1", "required": true,  "example": "PAY-1284" },
+    "id":                { "type": "string",   "tier": "L3", "required": true },
+    "project":           { "type": "string",   "tier": "L2", "required": true,  "notes": "project key — Loupe uses it for repo binding" },
+    "issueType":         { "type": "enum",     "tier": "L1", "values": ["Bug","Task","Story","Sub-task","Epic","Spike"] },
+    "summary":           { "type": "string",   "tier": "L1", "required": true },
+    "description":       { "type": "ADF",      "tier": "L2", "notes": "Atlassian Document Format. Rendered in detail view; excerpted on card." },
+    "priority":          { "type": "enum",     "tier": "L1", "values": ["Highest","High","Medium","Low","Lowest"], "notes": "Mapped to P1–P5 in Loupe UI" },
+    "status":            { "type": "string",   "tier": "L1", "notes": "To Do | In Progress | In Review | Done | etc." },
+    "statusCategory":    { "type": "enum",     "tier": "L2", "values": ["todo","indeterminate","done"] },
+    "resolution":        { "type": "string?",  "tier": "L3" },
+    "assignee":          { "type": "User?",    "tier": "L2", "notes": "If not the current user, ticket does not appear in Loupe inbox" },
+    "reporter":          { "type": "User",     "tier": "L2" },
+    "creator":           { "type": "User",     "tier": "L3" },
+    "created":           { "type": "ISO8601",  "tier": "L1", "notes": "Rendered as age (e.g. 2h, 3d)" },
+    "updated":           { "type": "ISO8601",  "tier": "L2" },
+    "due":               { "type": "ISO8601?", "tier": "L2" },
+    "labels":            { "type": "string[]", "tier": "L2", "notes": "Includes `loupe:auto` if user has opted ticket into auto-dispatch" },
+    "components":        { "type": "string[]", "tier": "L2", "notes": "Often used by Loupe to infer repo binding" },
+    "fixVersions":       { "type": "string[]", "tier": "L3" },
+    "affectsVersions":   { "type": "string[]", "tier": "L3" },
+    "sprint":            { "type": "string?",  "tier": "L3" },
+    "epicLink":          { "type": "string?",  "tier": "L3" },
+    "parent":            { "type": "TicketRef?", "tier": "L3" },
+    "subtasks":          { "type": "TicketRef[]", "tier": "L2" },
+    "links":             { "type": "Link[]",  "tier": "L2", "notes": "blocks, is blocked by, relates to, duplicates" },
+    "comments":          { "type": "Comment[]", "tier": "L2", "notes": "Last 2–3 inline in detail view; full thread on expand" },
+    "attachments":       { "type": "Attachment[]", "tier": "L2" },
+    "watchers":          { "type": "User[]",  "tier": "L3" },
+    "storyPoints":       { "type": "number?", "tier": "L3" },
+    "acceptanceCriteria":{ "type": "string?", "tier": "L2", "notes": "Highest-signal field for agent context. Loupe prefers this over description prose in the dispatch brief." }
+  },
+
+  "loupe_triage": {
+    "$comment": "Output of cheap pre-processing on every ticket. ~$0.001/ticket on a Haiku-class model. Re-runs when ticket content changes.",
+    "scope":                    { "type": "enum",       "tier": "L1", "values": ["trivial","standard","open-ended"] },
+    "suggestedAction":          { "type": "enum",       "tier": "L1", "values": ["dispatch","plan-and-dispatch","plan-with-critique","needs-info"] },
+    "costEstimate":             { "type": "Range",      "tier": "L1", "example": { "low": 0.30, "high": 0.55, "currency": "USD" }, "notes": "Null when suggestedAction = needs-info" },
+    "riskAreas":                { "type": "string[]",   "tier": "L1", "example": ["payments","concurrency"], "notes": "Standardized vocabulary: payments, auth, security, migration, ml-quality, concurrency, data-loss, performance, infra, observability" },
+    "constraints":              { "type": "Constraint[]", "tier": "L1", "notes": "Extracted from description / comments / acceptance criteria. Rendered as Slack-style mono tags on the card." },
+    "missingInfo":              { "type": "string[]?",  "tier": "L1", "notes": "When non-null, replaces the suggestedAction chip with a 'Needs:' indicator." },
+    "duplicateOf":              { "type": "TicketRef[]?", "tier": "L2", "notes": "Tickets / PRs with high semantic similarity to this one" },
+    "relatedPRs":               { "type": "PRRef[]?",   "tier": "L2" },
+    "repoBinding":              { "type": "RepoRef",    "tier": "L2", "notes": "Inferred from project / components if not configured" },
+    "defaultAgent":             { "type": "enum",       "tier": "L2", "values": ["claude","codex","both"] },
+    "secondOpinionRecommended": { "type": "boolean",    "tier": "L2", "notes": "True when scope=open-ended OR risk includes payments/auth/security" },
+    "trustHistory":             { "type": "object",     "tier": "L3", "schema": { "similarCount": "number", "agentSuccessRate": "number" } },
+    "triageGeneratedAt":        { "type": "ISO8601",    "tier": "L3" },
+    "triageModel":              { "type": "string",     "tier": "L3", "notes": "Model used for this triage run, for replayability" }
+  },
+
+  "loupe_state": {
+    "$comment": "Loupe's own state machine layer over the JIRA ticket.",
+    "loupeId":          { "type": "uuid",         "tier": "L3" },
+    "state":            { "type": "enum",         "tier": "L1", "values": ["ticket","plan-ready","running","sent-back","stuck","pr-ready","accepted","dismissed"] },
+    "firstSeenAt":      { "type": "ISO8601",      "tier": "L3" },
+    "dispatchHistory":  { "type": "Dispatch[]",   "tier": "L2", "notes": "Previous attempts to fix this ticket — visible in detail view" },
+    "snoozedUntil":     { "type": "ISO8601?",     "tier": "L2" },
+    "sentToHuman":      { "type": "boolean",      "tier": "L2", "notes": "True when user picked 'Send to me' — mutes from Loupe inbox, ticket stays in JIRA" }
+  },
+
+  "supporting_types": {
+    "Constraint": {
+      "phrase":       { "type": "string", "example": "ship by 3pm today" },
+      "kind":         { "type": "enum",   "values": ["deadline","technical","scope","dependency"] },
+      "extractedFrom":{ "type": "enum",   "values": ["description","acceptance_criteria","comment","title"] }
+    },
+    "RepoRef":     { "owner": "string", "repo": "string", "branch": "string?" },
+    "TicketRef":   { "key": "string", "summary": "string" },
+    "PRRef":       { "key": "string", "number": "number", "url": "string", "state": "open|merged|closed" },
+    "User":        { "accountId": "string", "displayName": "string", "avatar": "url?" },
+    "Comment":     { "author": "User", "body": "string", "created": "ISO8601" },
+    "Link":        { "type": "string", "outwardIssue": "TicketRef" },
+    "Attachment":  { "filename": "string", "url": "string", "mimeType": "string", "size": "number" },
+    "Dispatch":    { "dispatchedAt": "ISO8601", "agent": "string", "mode": "dispatch|plan-and-dispatch|plan-with-critique", "outcome": "accepted|sent-back|failed|stuck" }
+  },
+
+  "examples": [
+    {
+      "$comment": "PAY-1284 · Senior-eng grade payments bug. High risk, hard deadline, explicit constraints.",
+      "jira": {
+        "key": "PAY-1284",
+        "project": "PAY",
+        "issueType": "Bug",
+        "summary": "Fix race in Stripe webhook handler",
+        "description": "Intermittent duplicate Stripe charges under high load. Two webhook deliveries for the same event_id arrive concurrently and both pass the 'already processed?' check before either writes the marker. Need a safe concurrency fix.",
+        "priority": "Highest",
+        "status": "To Do",
+        "created": "2026-05-25T07:42:00Z",
+        "components": ["pay-api"],
+        "acceptanceCriteria": "Concurrent dupes eliminated. Serial-retry behaviour for Stripe redeliveries unchanged."
+      },
+      "loupe_triage": {
+        "scope": "open-ended",
+        "suggestedAction": "plan-with-critique",
+        "costEstimate": { "low": 0.30, "high": 0.55, "currency": "USD" },
+        "riskAreas": ["payments", "concurrency"],
+        "constraints": [
+          { "phrase": "ship by 3pm today",   "kind": "deadline",  "extractedFrom": "description" },
+          { "phrase": "no new dependencies", "kind": "technical", "extractedFrom": "description" }
+        ],
+        "defaultAgent": "claude",
+        "secondOpinionRecommended": true
+      },
+      "loupe_state": { "state": "ticket" }
+    },
+    {
+      "$comment": "BILL-308 · Routine task, well-scoped, single technical constraint.",
+      "jira": {
+        "key": "BILL-308",
+        "project": "BILL",
+        "issueType": "Task",
+        "summary": "Add /healthz endpoint to billing service",
+        "description": "Standard healthcheck. Returns DB connectivity, queue depth, Stripe API ping.",
+        "priority": "Medium",
+        "status": "To Do",
+        "created": "2026-05-23T11:00:00Z",
+        "components": ["billing-svc"],
+        "acceptanceCriteria": "Endpoint returns 200 OK with JSON body listing each dependency check. P95 under 200ms."
+      },
+      "loupe_triage": {
+        "scope": "standard",
+        "suggestedAction": "dispatch",
+        "costEstimate": { "low": 0.12, "high": 0.22, "currency": "USD" },
+        "riskAreas": [],
+        "constraints": [
+          { "phrase": "p95 < 200ms", "kind": "technical", "extractedFrom": "acceptance_criteria" }
+        ],
+        "defaultAgent": "codex",
+        "secondOpinionRecommended": false
+      },
+      "loupe_state": { "state": "ticket" }
+    },
+    {
+      "$comment": "SEC-22 · Auth/security work, mid-priority, two non-obvious constraints.",
+      "jira": {
+        "key": "SEC-22",
+        "project": "SEC",
+        "issueType": "Task",
+        "summary": "Rate-limit signup endpoint",
+        "description": "Mitigate scripted account creation. Per-IP token bucket; reject after threshold. Don't reveal the threshold value in error responses or headers.",
+        "priority": "Medium",
+        "status": "To Do",
+        "created": "2026-05-18T15:24:00Z",
+        "components": ["auth-svc"],
+        "acceptanceCriteria": "Signup throttled at N req/min/IP. Excess returns generic 429 with no rate-limit headers leaked."
+      },
+      "loupe_triage": {
+        "scope": "standard",
+        "suggestedAction": "plan-with-critique",
+        "costEstimate": { "low": 0.25, "high": 0.45, "currency": "USD" },
+        "riskAreas": ["auth", "security"],
+        "constraints": [
+          { "phrase": "per-IP not per-account",     "kind": "technical", "extractedFrom": "description" },
+          { "phrase": "don't leak the limit value", "kind": "technical", "extractedFrom": "description" }
+        ],
+        "defaultAgent": "claude",
+        "secondOpinionRecommended": true
+      },
+      "loupe_state": { "state": "ticket" }
+    },
+    {
+      "$comment": "INFRA-1011 · Trivial dep bump. Plan-and-dispatch still recommended because infra changes warrant a glance.",
+      "jira": {
+        "key": "INFRA-1011",
+        "project": "INFRA",
+        "issueType": "Task",
+        "summary": "Update Terraform provider to 1.8",
+        "description": "Provider 1.8 unlocks drift detection fixes. Low-risk; needs lockfile update and plan output attached to the PR.",
+        "priority": "Low",
+        "status": "To Do",
+        "created": "2026-05-20T09:00:00Z",
+        "components": ["infra"],
+        "acceptanceCriteria": "terraform plan output clean; no resource changes."
+      },
+      "loupe_triage": {
+        "scope": "trivial",
+        "suggestedAction": "plan-and-dispatch",
+        "costEstimate": { "low": 0.18, "high": 0.28, "currency": "USD" },
+        "riskAreas": ["infra"],
+        "constraints": [
+          { "phrase": "attach terraform plan output", "kind": "scope", "extractedFrom": "description" }
+        ],
+        "defaultAgent": "codex",
+        "secondOpinionRecommended": false
+      },
+      "loupe_state": { "state": "ticket" }
+    },
+    {
+      "$comment": "SEARCH-44 · Open-ended ML/perf story. Multiple constraints. Highest-cost ticket.",
+      "jira": {
+        "key": "SEARCH-44",
+        "project": "SEARCH",
+        "issueType": "Story",
+        "summary": "Implement learned re-ranking on product search",
+        "description": "Add a learned re-ranker on top of existing BM25 retrieval. Train on the click logs in search_events. Improve NDCG@10. Maintain current p95 latency. Don't introduce a new service in v1.",
+        "priority": "Medium",
+        "status": "To Do",
+        "created": "2026-05-24T18:10:00Z",
+        "components": ["search-svc"],
+        "acceptanceCriteria": "NDCG@10 improves ≥5% on held-out set. P95 latency stays under 250ms."
+      },
+      "loupe_triage": {
+        "scope": "open-ended",
+        "suggestedAction": "plan-with-critique",
+        "costEstimate": { "low": 0.65, "high": 1.10, "currency": "USD" },
+        "riskAreas": ["production", "ml-quality"],
+        "constraints": [
+          { "phrase": "p95 < 250ms",         "kind": "technical", "extractedFrom": "acceptance_criteria" },
+          { "phrase": "no new service in v1","kind": "scope",     "extractedFrom": "description" },
+          { "phrase": "use existing click logs","kind": "scope",  "extractedFrom": "description" }
+        ],
+        "defaultAgent": "codex",
+        "secondOpinionRecommended": true
+      },
+      "loupe_state": { "state": "ticket" }
+    },
+    {
+      "$comment": "DATA-71 · Bug with missing info. Loupe blocks the suggest chip and surfaces what's needed.",
+      "jira": {
+        "key": "DATA-71",
+        "project": "DATA",
+        "issueType": "Bug",
+        "summary": "Ingest pipeline drops records on transient S3 errors",
+        "description": "Some records are lost when S3 returns 5xx. Need retry with backoff.",
+        "priority": "Low",
+        "status": "To Do",
+        "created": "2026-05-22T13:35:00Z",
+        "components": ["data-ingest"],
+        "acceptanceCriteria": null
+      },
+      "loupe_triage": {
+        "scope": "standard",
+        "suggestedAction": "needs-info",
+        "costEstimate": null,
+        "riskAreas": ["data-loss"],
+        "constraints": [],
+        "missingInfo": [
+          "reproduction steps",
+          "expected behavior",
+          "affected record count or error log excerpt"
+        ],
+        "defaultAgent": "claude",
+        "secondOpinionRecommended": false
+      },
+      "loupe_state": { "state": "ticket" }
+    },
+    {
+      "$comment": "OBSERV-205 · Routine refactor, auth-touching so plan-and-dispatch recommended.",
+      "jira": {
+        "key": "OBSERV-205",
+        "project": "OBSERV",
+        "issueType": "Task",
+        "summary": "Add structured logging to auth-svc middleware",
+        "description": "Replace ad-hoc logger.info calls with structured JSON logs. Standard fields: trace_id, user_id (when present), latency_ms. Preserve existing log message text.",
+        "priority": "Low",
+        "status": "To Do",
+        "created": "2026-05-18T08:00:00Z",
+        "components": ["auth-svc"],
+        "acceptanceCriteria": "All log lines in middleware emit structured JSON. No plaintext logs remain."
+      },
+      "loupe_triage": {
+        "scope": "standard",
+        "suggestedAction": "plan-and-dispatch",
+        "costEstimate": { "low": 0.22, "high": 0.35, "currency": "USD" },
+        "riskAreas": ["auth", "observability"],
+        "constraints": [
+          { "phrase": "preserve existing log message text", "kind": "technical", "extractedFrom": "description" }
+        ],
+        "defaultAgent": "codex",
+        "secondOpinionRecommended": false
+      },
+      "loupe_state": { "state": "ticket" }
+    }
+  ]
+}

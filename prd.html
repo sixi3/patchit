@@ -1,0 +1,1765 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Loupe — PRD v0.4</title>
+  <style>
+    :root {
+      --bg: #0b0d0f;
+      --surface: #14171a;
+      --surface-2: #1c2025;
+      --surface-3: #242a30;
+      --border: #24292f;
+      --border-2: #2f363d;
+      --text: #e6edf3;
+      --text-dim: #8b949e;
+      --text-dimmer: #6e7681;
+      --accent: #4ade80;
+      --warn: #fbbf24;
+      --danger: #f87171;
+      --info: #60a5fa;
+      --purple: #c084fc;
+      --jira: #2684ff;
+      --claude: #c084fc;
+      --codex:  #4ade80;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      background: var(--bg); color: var(--text);
+      font-family: var(--sans);
+      font-size: 15px; line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    .container { max-width: 920px; margin: 0 auto; padding: 64px 32px 96px; }
+
+    /* Agent icons */
+    .ico {
+      display: inline-block;
+      vertical-align: -1px;
+      width: 11px; height: 11px;
+      margin-right: 3px;
+    }
+    .ico-claude { color: var(--claude); }
+    .ico-codex  { color: var(--codex); }
+
+    header.doc-head { border-bottom: 1px solid var(--border); padding-bottom: 32px; margin-bottom: 48px; }
+    header.doc-head .eyebrow {
+      font-family: var(--mono); font-size: 12px;
+      color: var(--text-dim); text-transform: uppercase;
+      letter-spacing: 0.08em; margin-bottom: 16px;
+    }
+    header.doc-head .wordmark {
+      display: flex; align-items: center; gap: 14px; margin-bottom: 12px;
+    }
+    header.doc-head .wordmark-ico {
+      width: 38px; height: 38px; flex-shrink: 0;
+      border: 1.5px solid var(--text); border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      position: relative;
+    }
+    header.doc-head .wordmark-ico::after {
+      content: ""; width: 12px; height: 12px;
+      border: 1.5px solid var(--accent); border-radius: 50%;
+    }
+    header.doc-head h1 {
+      font-size: 44px; font-weight: 600;
+      letter-spacing: -0.02em; margin: 0; line-height: 1.1;
+    }
+    header.doc-head .tagline {
+      font-size: 18px; color: var(--text-dim);
+      margin: 0 0 24px; font-weight: 400;
+    }
+    .meta-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
+      font-family: var(--mono); font-size: 12px;
+    }
+    .meta-grid .meta-label {
+      color: var(--text-dimmer); text-transform: uppercase;
+      letter-spacing: 0.05em; display: block; margin-bottom: 4px;
+    }
+    .meta-grid .meta-value { color: var(--text); }
+
+    section { margin-bottom: 56px; }
+    section.compact { margin-bottom: 32px; }
+    h2 {
+      font-size: 22px; font-weight: 600;
+      letter-spacing: -0.01em; margin: 0 0 20px;
+      padding-bottom: 8px; border-bottom: 1px solid var(--border);
+    }
+    h3 {
+      font-size: 16px; font-weight: 600;
+      margin: 28px 0 10px; color: var(--text);
+    }
+    h4 {
+      font-size: 12px; font-weight: 600;
+      margin: 22px 0 8px; color: var(--text-dim);
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    p { margin: 0 0 14px; }
+    ul, ol { padding-left: 20px; margin: 0 0 14px; }
+    li { margin-bottom: 6px; }
+    code {
+      font-family: var(--mono); font-size: 13px;
+      background: var(--surface-2); padding: 2px 6px;
+      border-radius: 4px; color: var(--text);
+    }
+
+    .callout {
+      border-left: 3px solid var(--warn);
+      background: rgba(251, 191, 36, 0.06);
+      padding: 14px 18px; margin: 20px 0;
+      border-radius: 0 6px 6px 0;
+    }
+    .callout.danger { border-left-color: var(--danger); background: rgba(248,113,113,0.06); }
+    .callout.info   { border-left-color: var(--info);   background: rgba(96,165,250,0.06); }
+    .callout .callout-title {
+      font-size: 11px; font-family: var(--mono);
+      text-transform: uppercase; letter-spacing: 0.06em;
+      margin-bottom: 6px; color: var(--warn);
+    }
+    .callout.danger .callout-title { color: var(--danger); }
+    .callout.info   .callout-title { color: var(--info); }
+    .callout p:last-child { margin-bottom: 0; }
+
+    /* Feature inventory table */
+    .feature-table {
+      width: 100%; border-collapse: collapse; margin: 16px 0;
+      font-size: 14px;
+    }
+    .feature-table th, .feature-table td {
+      text-align: left; padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    .feature-table th {
+      font-family: var(--mono); font-size: 11px;
+      color: var(--text-dimmer); text-transform: uppercase;
+      letter-spacing: 0.06em; font-weight: 600;
+      background: var(--surface-2);
+    }
+    .feature-table tr:last-child td { border-bottom: none; }
+    .feature-table .surface { font-weight: 500; color: var(--text); }
+    .feature-table .v { font-family: var(--mono); font-size: 11px; }
+    .feature-table .v.in { color: var(--accent); }
+    .feature-table .v.next { color: var(--warn); }
+    .feature-table tbody tr:hover { background: rgba(255,255,255,0.02); }
+
+    /* Mockup framework */
+    .mockup-wrap {
+      margin: 24px 0; padding: 24px;
+      background: linear-gradient(180deg, #0f1216 0%, #0a0c0f 100%);
+      border: 1px solid var(--border); border-radius: 12px;
+    }
+    .mockup-caption {
+      font-family: var(--mono); font-size: 11px;
+      color: var(--text-dimmer); text-transform: uppercase;
+      letter-spacing: 0.08em; margin-bottom: 16px; text-align: center;
+    }
+
+    /* Phone shell */
+    .phone {
+      max-width: 380px; margin: 0 auto;
+      background: var(--surface);
+      border: 1px solid var(--border-2);
+      border-radius: 28px; overflow: hidden;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+    }
+    .phone .statusbar {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 14px 20px 8px; font-family: var(--mono);
+      font-size: 11px; color: var(--text-dim);
+    }
+    .phone .navbar {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 8px 16px 12px; border-bottom: 1px solid var(--border);
+    }
+    .phone .navbar .brand {
+      font-weight: 600; font-size: 18px; letter-spacing: -0.02em;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .phone .navbar .brand-mark {
+      width: 14px; height: 14px;
+      border: 1.5px solid currentColor; border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .phone .navbar .brand-mark::after {
+      content: ""; width: 5px; height: 5px;
+      background: var(--accent); border-radius: 50%;
+    }
+    .phone .navbar .nav-actions { display: flex; gap: 12px; font-size: 13px; color: var(--text-dim); }
+
+    .summary-strip {
+      display: grid; grid-template-columns: 1fr 1fr 1fr;
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+      background: var(--surface-2);
+    }
+    .summary-strip .item { text-align: center; }
+    .summary-strip .item:not(:last-child) { border-right: 1px solid var(--border); }
+    .summary-strip .lbl {
+      font-family: var(--mono); font-size: 9px;
+      color: var(--text-dimmer); text-transform: uppercase;
+      letter-spacing: 0.08em; margin-bottom: 2px;
+    }
+    .summary-strip .val { font-family: var(--mono); font-size: 13px; color: var(--text); }
+    .summary-strip .val.live { color: var(--info); }
+    .summary-strip .val.attention { color: var(--warn); }
+
+    .tabs {
+      display: flex; gap: 0;
+      border-bottom: 1px solid var(--border);
+      padding: 0 16px;
+    }
+    .tabs .tab {
+      padding: 10px 0; margin-right: 18px;
+      font-size: 12px; color: var(--text-dim);
+      border-bottom: 2px solid transparent;
+      font-family: var(--mono); letter-spacing: 0.04em;
+    }
+    .tabs .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+    .tabs .tab .count {
+      font-family: var(--mono); font-size: 10px;
+      color: var(--text-dimmer); margin-left: 4px;
+    }
+
+    /* Inbox row */
+    .inbox-section-label {
+      display: flex; justify-content: space-between; align-items: center;
+      font-family: var(--mono); font-size: 10px;
+      color: var(--text-dimmer); text-transform: uppercase;
+      letter-spacing: 0.08em; padding: 16px 16px 6px;
+    }
+    .inbox-row {
+      display: grid;
+      grid-template-columns: 3px 1fr auto;
+      gap: 0; padding: 0;
+      border-bottom: 1px solid var(--border);
+      align-items: stretch;
+    }
+    .inbox-row .stripe { background: var(--text-dimmer); }
+    .inbox-row.p-high .stripe    { background: var(--danger); }
+    .inbox-row.p-med  .stripe    { background: var(--warn); }
+    .inbox-row.p-low  .stripe    { background: var(--info); }
+    .inbox-row.p-routine .stripe { background: var(--text-dimmer); }
+    .inbox-row .body { padding: 12px 14px 12px 12px; min-width: 0; }
+    .inbox-row .row-top {
+      display: flex; gap: 8px; align-items: center; margin-bottom: 4px;
+    }
+    .inbox-row .typetag {
+      font-family: var(--mono); font-size: 9.5px;
+      letter-spacing: 0.08em; text-transform: uppercase;
+      padding: 2px 6px; border-radius: 3px;
+      color: var(--text-dim); background: var(--surface-3);
+      border: 1px solid var(--border-2);
+    }
+    .inbox-row .typetag.pr   { color: var(--accent); border-color: rgba(74,222,128,0.4); }
+    .inbox-row .typetag.run  { color: var(--info); border-color: rgba(96,165,250,0.4); }
+    .inbox-row .typetag.tkt  { color: var(--jira); border-color: rgba(38,132,255,0.4); }
+    .inbox-row .typetag.plan { color: var(--purple); border-color: rgba(192,132,252,0.4); }
+    .inbox-row .ref {
+      font-family: var(--mono); font-size: 10.5px; color: var(--text-dim);
+    }
+    .inbox-row .title {
+      font-size: 13.5px; font-weight: 500;
+      color: var(--text); line-height: 1.35;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .inbox-row .meta {
+      display: flex; gap: 10px; align-items: center;
+      font-family: var(--mono); font-size: 10px;
+      color: var(--text-dim); margin-top: 4px;
+    }
+    .inbox-row .meta .agent-claude { color: var(--claude); display: inline-flex; align-items: center; }
+    .inbox-row .meta .agent-codex  { color: var(--codex);  display: inline-flex; align-items: center; }
+    .inbox-row .meta .agent-both   { color: var(--warn); display: inline-flex; align-items: center; gap: 2px; }
+    .inbox-row .meta .live-dot {
+      display: inline-block; width: 5px; height: 5px;
+      border-radius: 50%; background: var(--info);
+      margin-right: 4px; animation: pulse 1.6s infinite;
+    }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .inbox-row .swipe-hint {
+      width: 24px; display: flex; align-items: center; justify-content: center;
+      color: var(--text-dimmer); font-family: var(--mono); font-size: 16px;
+    }
+    .inbox-row .progress {
+      height: 2px; background: var(--surface-3); border-radius: 1px;
+      margin-top: 6px; overflow: hidden; max-width: 80%;
+    }
+    .inbox-row .progress > div { height: 100%; background: var(--info); }
+
+    /* Pills */
+    .pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 1.5px 6px; border-radius: 3px;
+      font-family: var(--mono); font-size: 9.5px;
+      background: var(--surface-3); color: var(--text-dim);
+      border: 1px solid var(--border-2);
+      letter-spacing: 0.04em; text-transform: uppercase;
+    }
+    .pill.risk-high { color: var(--danger); border-color: rgba(248,113,113,0.4); background: rgba(248,113,113,0.08); }
+    .pill.risk-med  { color: var(--warn); border-color: rgba(251,191,36,0.4); background: rgba(251,191,36,0.08); }
+    .pill.risk-low  { color: var(--text-dim); }
+    .pill.confidence-high { color: var(--accent); border-color: rgba(74,222,128,0.4); }
+    .pill.confidence-med  { color: var(--warn); border-color: rgba(251,191,36,0.4); }
+    .pill.confidence-low  { color: var(--danger); border-color: rgba(248,113,113,0.4); }
+
+    /* Bottom tab bar */
+    .tabbar {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .tabbar .item {
+      padding: 12px 0 18px; text-align: center;
+      font-size: 10px; color: var(--text-dimmer);
+      font-family: var(--mono); letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .tabbar .item.active { color: var(--text); }
+    .tabbar .item .ico-sq {
+      display: block; width: 18px; height: 18px;
+      margin: 0 auto 4px; border: 1.5px solid currentColor;
+      border-radius: 4px;
+    }
+    .tabbar .item.active .ico-sq { background: currentColor; }
+
+    /* PR view */
+    .pr-frame {
+      max-width: 380px; margin: 0 auto;
+      background: var(--surface);
+      border: 1px solid var(--border-2); border-radius: 28px;
+      overflow: hidden;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+    }
+    .pr-topbar {
+      display: flex; align-items: center; gap: 10px;
+      padding: 14px 16px 12px; border-bottom: 1px solid var(--border);
+    }
+    .pr-topbar .back { color: var(--text-dim); font-size: 18px; }
+    .pr-topbar .breadcrumb {
+      font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+    }
+    .pr-topbar .breadcrumb .pill { margin-left: 4px; }
+
+    .pr-title-block {
+      padding: 14px 16px 16px; border-bottom: 1px solid var(--border);
+    }
+    .pr-title-block h2 {
+      margin: 0 0 6px;
+      font-size: 17px; font-weight: 600;
+      letter-spacing: -0.01em;
+      line-height: 1.3; color: var(--text);
+      padding: 0; border: none;
+    }
+    .pr-title-block .submeta {
+      display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+      font-family: var(--mono); font-size: 10.5px;
+      color: var(--text-dim); margin-top: 8px;
+    }
+    .pr-title-block .agent-tag.claude { color: var(--claude); display: inline-flex; align-items: center; }
+    .pr-title-block .agent-tag.codex  { color: var(--codex);  display: inline-flex; align-items: center; }
+
+    .rec-card {
+      margin: 14px 14px 0; padding: 14px;
+      background: linear-gradient(180deg, rgba(74,222,128,0.06) 0%, var(--surface-2) 100%);
+      border: 1px solid rgba(74,222,128,0.35);
+      border-radius: 10px;
+    }
+    .rec-card .rec-head {
+      font-family: var(--mono); font-size: 9.5px;
+      color: var(--accent); text-transform: uppercase;
+      letter-spacing: 0.1em; margin-bottom: 6px;
+    }
+    .rec-card .rec-verdict {
+      font-size: 15px; font-weight: 600;
+      color: var(--text); line-height: 1.35; margin-bottom: 8px;
+    }
+    .rec-card .rec-explain {
+      font-size: 12.5px; color: var(--text-dim); line-height: 1.5;
+    }
+    .rec-card .rec-stats {
+      display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap;
+    }
+    .rec-card .read-this {
+      margin-top: 10px; padding: 8px 10px;
+      background: var(--surface); border: 1px solid var(--border-2);
+      border-radius: 6px; font-size: 12px;
+      display: flex; gap: 8px; align-items: center;
+    }
+    .rec-card .read-this .label {
+      font-family: var(--mono); font-size: 9.5px;
+      color: var(--text-dimmer); text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .rec-card .read-this .target {
+      font-family: var(--mono); color: var(--text); font-size: 11.5px;
+    }
+
+    .q-list { margin: 16px 0 0; }
+    .q-list .q-section-label {
+      padding: 0 16px 8px; font-family: var(--mono);
+      font-size: 10px; color: var(--text-dimmer);
+      text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    .q-row {
+      display: grid;
+      grid-template-columns: 24px 1fr auto;
+      gap: 8px; align-items: center;
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+    }
+    .q-row.expanded { background: var(--surface-2); }
+    .q-row .verdict {
+      font-family: var(--mono); font-size: 14px;
+      text-align: center; font-weight: 600;
+    }
+    .q-row .verdict.yes     { color: var(--accent); }
+    .q-row .verdict.no      { color: var(--danger); }
+    .q-row .verdict.unknown { color: var(--info); }
+    .q-row .verdict.warning { color: var(--warn); }
+    .q-row .q-text { font-size: 13px; color: var(--text); line-height: 1.4; }
+    .q-row .q-evidence {
+      font-family: var(--mono); font-size: 10.5px;
+      color: var(--text-dim); margin-top: 4px;
+    }
+    .q-row .chevron {
+      color: var(--text-dimmer); font-family: var(--mono); font-size: 13px;
+    }
+    .q-row .expansion {
+      grid-column: 1 / -1;
+      margin-top: 10px; padding: 10px 12px;
+      background: var(--surface);
+      border-left: 2px solid var(--purple);
+      border-radius: 0 4px 4px 0;
+      font-size: 12.5px; line-height: 1.5; color: var(--text);
+    }
+    .q-row .expansion code { font-size: 11px; background: var(--surface-2); }
+    .q-row .expansion .evid-link {
+      display: block; margin-top: 6px;
+      font-family: var(--mono); font-size: 10.5px;
+      color: var(--info);
+    }
+
+    .action-bar {
+      padding: 14px 14px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--surface-2);
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    }
+    .action-bar .act-btn {
+      padding: 10px 10px;
+      background: var(--surface-3);
+      border: 1px solid var(--border-2);
+      border-radius: 7px;
+      font-size: 12.5px; color: var(--text);
+      text-align: left;
+    }
+    .action-bar .act-btn .verb {
+      display: block; font-family: var(--mono);
+      font-size: 9.5px; color: var(--text-dimmer);
+      text-transform: uppercase; letter-spacing: 0.06em;
+      margin-bottom: 2px;
+    }
+    .action-bar .act-btn.primary {
+      background: linear-gradient(180deg, #1f4d2f 0%, #163921 100%);
+      border-color: rgba(74,222,128,0.45);
+    }
+    .action-bar .act-btn.primary .verb { color: var(--accent); }
+
+    /* Dispatch sheet */
+    .dispatch-frame {
+      max-width: 380px; margin: 0 auto;
+      background: var(--surface);
+      border: 1px solid var(--border-2);
+      border-radius: 28px; overflow: hidden;
+    }
+    .dispatch-frame .topbar {
+      padding: 14px 16px 12px; border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .dispatch-frame .topbar .title { font-weight: 600; font-size: 15px; color: var(--text); }
+    .dispatch-frame .topbar .sub { font-family: var(--mono); font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+    .dispatch-frame .close { color: var(--text-dim); font-family: var(--mono); font-size: 16px; }
+    .dispatch-frame .ticket-summary {
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+      background: var(--surface-2);
+    }
+    .dispatch-frame .ticket-summary .label {
+      font-family: var(--mono); font-size: 10px;
+      color: var(--text-dimmer); text-transform: uppercase;
+      letter-spacing: 0.08em; margin-bottom: 4px;
+    }
+    .dispatch-frame .ticket-summary .body { font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
+    .mode-choice {
+      display: grid; grid-template-columns: 26px 1fr auto;
+      gap: 12px; padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      align-items: center;
+    }
+    .mode-choice.selected { background: rgba(74,222,128,0.05); }
+    .mode-choice .mode-ico {
+      width: 26px; height: 26px;
+      border: 1.5px solid var(--text-dim);
+      border-radius: 6px; display: flex;
+      align-items: center; justify-content: center;
+      font-family: var(--mono); font-size: 13px; color: var(--text-dim);
+    }
+    .mode-choice.selected .mode-ico {
+      background: var(--accent); color: var(--bg);
+      border-color: var(--accent);
+    }
+    .mode-choice .mode-name { font-size: 13.5px; font-weight: 500; color: var(--text); }
+    .mode-choice .mode-desc { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; line-height: 1.4; }
+    .mode-choice .mode-cost { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
+
+    /* Second-opinion sub-toggle */
+    .sub-toggle {
+      padding: 12px 16px 12px 54px;
+      background: rgba(192,132,252,0.05);
+      border-bottom: 1px solid var(--border);
+      display: flex; gap: 12px; align-items: center;
+      justify-content: space-between;
+    }
+    .sub-toggle .label-block { flex: 1; }
+    .sub-toggle .name {
+      font-size: 12.5px; font-weight: 500;
+      color: var(--text); margin-bottom: 2px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .sub-toggle .desc {
+      font-size: 11px; color: var(--text-dim); line-height: 1.4;
+    }
+    .sub-toggle .swt {
+      width: 34px; height: 20px; border-radius: 10px;
+      background: var(--purple);
+      position: relative; flex-shrink: 0;
+    }
+    .sub-toggle .swt::after {
+      content: ""; position: absolute;
+      right: 2px; top: 2px;
+      width: 16px; height: 16px;
+      border-radius: 50%; background: white;
+    }
+    .sub-toggle .swt.off { background: var(--border-2); }
+    .sub-toggle .swt.off::after { right: auto; left: 2px; }
+
+    .agent-picker {
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+    }
+    .agent-picker .label {
+      font-family: var(--mono); font-size: 10px;
+      color: var(--text-dimmer); text-transform: uppercase;
+      letter-spacing: 0.08em; margin-bottom: 8px;
+      display: flex; justify-content: space-between;
+    }
+    .agent-segment {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+    }
+    .agent-segment .opt {
+      padding: 10px 8px; text-align: center;
+      border: 1px solid var(--border-2);
+      border-radius: 7px;
+      background: var(--surface-2);
+      font-size: 12px;
+    }
+    .agent-segment .opt.selected {
+      border-color: var(--accent); background: rgba(74,222,128,0.06);
+    }
+    .agent-segment .opt .name {
+      font-weight: 500; color: var(--text);
+      display: flex; align-items: center; justify-content: center; gap: 4px;
+    }
+    .agent-segment .opt .name.claude-c { color: var(--claude); }
+    .agent-segment .opt .name.codex-c  { color: var(--codex); }
+    .agent-segment .opt .est {
+      font-family: var(--mono); font-size: 10.5px;
+      color: var(--text-dim); margin-top: 4px;
+    }
+    .agent-segment .opt .est.cheap { color: var(--accent); }
+
+    .second-opinion-picker {
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+      background: rgba(192,132,252,0.03);
+    }
+    .second-opinion-picker .label {
+      font-family: var(--mono); font-size: 10px;
+      color: var(--text-dimmer); text-transform: uppercase;
+      letter-spacing: 0.08em; margin-bottom: 8px;
+    }
+    .so-row {
+      display: grid; grid-template-columns: 1fr 14px 1fr;
+      gap: 10px; align-items: center;
+    }
+    .so-row .role {
+      padding: 8px 10px; border: 1px solid var(--border-2);
+      border-radius: 6px; background: var(--surface-2);
+      text-align: center;
+    }
+    .so-row .role .role-label {
+      font-family: var(--mono); font-size: 9px;
+      color: var(--text-dimmer); text-transform: uppercase;
+      letter-spacing: 0.08em; margin-bottom: 4px;
+    }
+    .so-row .role .agent {
+      font-size: 12px; font-weight: 500;
+      display: flex; align-items: center; justify-content: center; gap: 4px;
+    }
+    .so-row .role .agent.claude-c { color: var(--claude); }
+    .so-row .role .agent.codex-c  { color: var(--codex); }
+    .so-row .arrow {
+      color: var(--text-dim); text-align: center;
+      font-family: var(--mono); font-size: 13px;
+    }
+
+    .dispatch-cta {
+      margin: 14px 14px 18px; padding: 14px;
+      background: linear-gradient(180deg, #1f4d2f 0%, #163921 100%);
+      border: 1px solid rgba(74,222,128,0.45);
+      border-radius: 8px; text-align: center;
+      font-weight: 600; color: var(--text);
+    }
+
+    /* Plan review */
+    .plan-frame {
+      max-width: 380px; margin: 0 auto;
+      background: var(--surface);
+      border: 1px solid var(--border-2);
+      border-radius: 28px; overflow: hidden;
+    }
+    .plan-frame .topbar {
+      padding: 14px 16px 12px; border-bottom: 1px solid var(--border);
+    }
+    .plan-frame .topbar .title-row {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .plan-frame .topbar .title { font-weight: 600; font-size: 15px; }
+    .plan-frame .topbar .sub {
+      font-family: var(--mono); font-size: 11px;
+      color: var(--text-dim); margin-top: 4px;
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    }
+    .plan-frame .topbar .sub .agent-tag.claude { color: var(--claude); display: inline-flex; align-items: center; }
+    .plan-frame .topbar .sub .agent-tag.codex  { color: var(--codex);  display: inline-flex; align-items: center; }
+    .plan-frame .topbar .sub .vs { color: var(--text-dimmer); }
+
+    .plan-mode-tabs {
+      display: flex; padding: 0 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .plan-mode-tabs .pt {
+      padding: 10px 0; margin-right: 18px;
+      font-family: var(--mono); font-size: 11px;
+      color: var(--text-dim);
+      border-bottom: 2px solid transparent;
+      letter-spacing: 0.04em;
+    }
+    .plan-mode-tabs .pt.active {
+      color: var(--text); border-bottom-color: var(--accent);
+    }
+
+    .plan-body { padding: 16px; }
+    .plan-body h4 {
+      margin: 0 0 6px; font-size: 11px;
+      color: var(--text-dim); font-family: var(--mono);
+      text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    .plan-body p {
+      font-size: 13px; line-height: 1.55; color: var(--text);
+      margin-bottom: 10px;
+    }
+    .plan-body p .ins {
+      background: rgba(74,222,128,0.12);
+      color: var(--accent); padding: 0 2px; border-radius: 2px;
+    }
+    .plan-body p .del {
+      background: rgba(248,113,113,0.12);
+      color: var(--danger); padding: 0 2px; border-radius: 2px;
+      text-decoration: line-through;
+    }
+    .plan-body ul {
+      font-size: 12.5px; color: var(--text-dim); margin: 0 0 10px;
+    }
+    .plan-body li { margin-bottom: 4px; }
+    .plan-body li.added-by-critic {
+      color: var(--accent);
+    }
+    .plan-body li.added-by-critic::before { content: "+ "; color: var(--accent); }
+
+    /* Critique inline note */
+    .critique-note {
+      margin: 6px 0 16px;
+      padding: 10px 12px;
+      background: rgba(192,132,252,0.07);
+      border-left: 2px solid var(--claude);
+      border-radius: 0 6px 6px 0;
+    }
+    .critique-note.from-codex {
+      background: rgba(74,222,128,0.06);
+      border-left-color: var(--codex);
+    }
+    .critique-note .critic-tag {
+      font-family: var(--mono); font-size: 9.5px;
+      color: var(--claude); text-transform: uppercase;
+      letter-spacing: 0.08em; margin-bottom: 4px;
+      display: flex; align-items: center; gap: 4px;
+    }
+    .critique-note.from-codex .critic-tag { color: var(--codex); }
+    .critique-note .critic-body { font-size: 12px; line-height: 1.5; color: var(--text); }
+    .critique-note .critic-actions {
+      display: flex; gap: 6px; margin-top: 6px;
+    }
+    .critique-note .critic-actions .chip {
+      font-family: var(--mono); font-size: 9.5px;
+      padding: 3px 7px; border-radius: 4px;
+      border: 1px solid var(--border-2); color: var(--text-dim);
+      letter-spacing: 0.04em;
+    }
+    .critique-note .critic-actions .chip.adopt {
+      background: rgba(74,222,128,0.1);
+      color: var(--accent);
+      border-color: rgba(74,222,128,0.35);
+    }
+    .critique-note .critic-actions .chip.dismiss { }
+
+    .plan-actions {
+      padding: 12px 14px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--surface-2);
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    }
+    .plan-actions .btn {
+      padding: 10px; text-align: center;
+      border: 1px solid var(--border-2); border-radius: 7px;
+      font-size: 12.5px; background: var(--surface-3);
+    }
+    .plan-actions .btn.primary {
+      background: linear-gradient(180deg, #1f4d2f 0%, #163921 100%);
+      border-color: rgba(74,222,128,0.45);
+    }
+
+    /* Live frame */
+    .live-frame {
+      max-width: 380px; margin: 0 auto;
+      background: var(--surface); border: 1px solid var(--border-2);
+      border-radius: 28px; overflow: hidden;
+    }
+    .live-frame .topbar { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+    .live-frame .topbar .title { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+    .live-frame .topbar .sub {
+      font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    }
+    .live-frame .topbar .sub .agent-claude { color: var(--claude); display: inline-flex; align-items: center; }
+    .live-frame .topbar .sub .agent-codex  { color: var(--codex); display: inline-flex; align-items: center; }
+    .live-meta {
+      display: grid; grid-template-columns: 1fr 1fr 1fr;
+      padding: 10px 16px; border-bottom: 1px solid var(--border);
+      background: var(--surface-2);
+    }
+    .live-meta .lbl {
+      font-family: var(--mono); font-size: 9px;
+      color: var(--text-dimmer); text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .live-meta .val { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
+    .live-stream { padding: 12px 16px; max-height: 240px; overflow: hidden; }
+    .live-stream .step {
+      padding: 8px 0; border-bottom: 1px solid var(--border);
+      font-size: 12px; color: var(--text-dim); font-family: var(--mono);
+    }
+    .live-stream .step.cur { color: var(--text); }
+    .live-stream .step .ico-step { display: inline-block; width: 14px; color: var(--accent); }
+    .live-stream .step.cur .ico-step { color: var(--info); animation: pulse 1.6s infinite; }
+
+    /* Comparison */
+    .compare-row {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+      padding: 14px 16px;
+    }
+    .compare-row .col {
+      padding: 12px; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--surface-2);
+    }
+    .compare-row .col .agent-tag {
+      font-family: var(--mono); font-size: 10px;
+      letter-spacing: 0.08em; text-transform: uppercase;
+      margin-bottom: 6px;
+      display: flex; align-items: center; gap: 4px;
+    }
+    .compare-row .col.claude .agent-tag { color: var(--claude); }
+    .compare-row .col.codex  .agent-tag { color: var(--codex); }
+    .compare-row .col .verdict { font-size: 12.5px; font-weight: 500; line-height: 1.4; margin-bottom: 6px; }
+    .compare-row .col .stats {
+      display: flex; flex-wrap: wrap; gap: 4px;
+      margin-top: 6px; font-family: var(--mono); font-size: 10px; color: var(--text-dim);
+    }
+
+    .insp-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px;
+    }
+    .insp-card {
+      padding: 14px 16px; background: var(--surface);
+      border: 1px solid var(--border); border-radius: 8px;
+    }
+    .insp-card h4 { margin-top: 0; }
+    .insp-card .src {
+      font-family: var(--mono); font-size: 10px;
+      color: var(--text-dimmer); text-transform: uppercase;
+      letter-spacing: 0.08em; margin-bottom: 4px;
+    }
+    .insp-card ul { padding-left: 18px; margin-bottom: 0; font-size: 13px; }
+
+    .scope-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px;
+    }
+    .scope-grid .scope-card {
+      padding: 16px; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--surface);
+    }
+    .scope-grid .scope-card h4 { margin-top: 0; }
+    .scope-grid .scope-card ul { padding-left: 18px; margin-bottom: 0; font-size: 13.5px; }
+
+    @media (max-width: 760px) {
+      .container { padding: 32px 20px 64px; }
+      header.doc-head h1 { font-size: 32px; }
+      .meta-grid { grid-template-columns: repeat(2, 1fr); }
+      .scope-grid, .insp-grid { grid-template-columns: 1fr; }
+      .feature-table { font-size: 13px; }
+      .feature-table th, .feature-table td { padding: 8px 10px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Reusable agent icon SVGs -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="claude-mark" viewBox="0 0 16 16">
+      <path d="M8 0 L9.5 6.5 L16 8 L9.5 9.5 L8 16 L6.5 9.5 L0 8 L6.5 6.5 Z" fill="currentColor"/>
+    </symbol>
+    <symbol id="codex-mark" viewBox="0 0 16 16">
+      <g fill="none" stroke="currentColor" stroke-width="1.4">
+        <circle cx="8"    cy="4.2"  r="1.9"/>
+        <circle cx="3.5"  cy="6.8"  r="1.9"/>
+        <circle cx="3.5"  cy="11.2" r="1.9"/>
+        <circle cx="8"    cy="13.8" r="1.9"/>
+        <circle cx="12.5" cy="11.2" r="1.9"/>
+        <circle cx="12.5" cy="6.8"  r="1.9"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="container">
+
+  <header class="doc-head">
+    <div class="eyebrow">Product requirements · v0.4 · MVP build spec</div>
+    <div class="wordmark">
+      <div class="wordmark-ico"></div>
+      <h1>Loupe</h1>
+    </div>
+    <p class="tagline">One inbox for tickets, running agents, and the PRs they raise — built for engineers who direct two or more coding agents a day.</p>
+    <div class="meta-grid">
+      <div><span class="meta-label">Owner</span><span class="meta-value">anand</span></div>
+      <div><span class="meta-label">Date</span><span class="meta-value">2026-05-25</span></div>
+      <div><span class="meta-label">Status</span><span class="meta-value">Draft v0.4</span></div>
+      <div><span class="meta-label">Target v1</span><span class="meta-value">10 design partners</span></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>TL;DR</h2>
+    <p>A senior engineer in 2026 has work entering through JIRA, executing on Claude Code <svg class="ico ico-claude"><use href="#claude-mark"/></svg> and Codex <svg class="ico ico-codex"><use href="#codex-mark"/></svg>, and landing as PRs on GitHub — across at least three surfaces, none of which know about the others. Loupe collapses that into one mobile inbox: tickets, running agents, and agent-authored PRs in a single stream, tagged by type and sorted by attention need.</p>
+    <p>The wedge isn't dispatch — vendors and Atlassian Rovo already do that. The wedge is the <b>review surface for agent-authored PRs</b>: a layered, question-driven form factor where the agent commits to a recommendation, and <em>cross-agent critique</em> (one agent plans, another reviews) is built into the dispatch flow.</p>
+    <p>Design language: Linear's tight information density meets PagerDuty's priority-driven, action-oriented inbox.</p>
+  </section>
+
+  <section>
+    <h2>Naming</h2>
+    <p>The product is <b>Loupe</b>. A loupe is the magnifying glass jewelers and photographers use to inspect detail — semantically aligned with the wedge (close inspection of agent work). Short, unusual, low-collision in dev tooling. Prior associations (Loupe photography app, jeweler-tool brands) sit outside our market and don't fight us for SEO or discovery. Trademark search before launch; no obvious blockers.</p>
+    <div class="callout">
+      <div class="callout-title">Competitive density</div>
+      <p>Cursor 3 "Glass" (Apr 2026) ships an Agents Window with multi-source, multi-LLM management. Atlassian Rovo (Feb 2026) ships AI agents inside JIRA with MCP-compatible third-party agents. Anthropic and OpenAI have shipped Dispatch and Codex Mobile. Conductor (Melty Labs) does parallel agent runs on macOS. Loupe's only durable wedge is the PR <em>review</em> surface and the cross-agent critique loop — the places all four leave open.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Problem</h2>
+    <ol>
+      <li><b>Work has too many homes.</b> Tickets in JIRA, agents in two terminals, PRs on GitHub mobile. None share context.</li>
+      <li><b>PR review was designed for human-to-human handoff.</b> Diffs assume shared context. With agents, the reviewer is meeting the work cold. Most agent failures live in misread intent or unflagged approach choices — neither visible in the diff.</li>
+      <li><b>Throughput, not thoroughness, is now the constraint.</b> A senior eng went from 2 PRs/day to 20. Existing review tools optimize for the wrong axis.</li>
+      <li><b>Multi-agent critique is a manual workflow.</b> Power users paste a plan from one CLI into another for a sanity check. It works, but it's a copy-paste tax. Nobody has productized the loop.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Target user</h2>
+    <p><b>Senior+ engineers at JIRA-shop companies who already run Claude Code <svg class="ico ico-claude"><use href="#claude-mark"/></svg>, Codex <svg class="ico ico-codex"><use href="#codex-mark"/></svg>, or both daily.</b> BYO API keys. Review ≥1 agent-authored PR a day. Individual purchaser. Not teams (yet), not policy buyers, not non-engineers.</p>
+  </section>
+
+  <section>
+    <h2>Design inspiration</h2>
+    <div class="insp-grid">
+      <div class="insp-card">
+        <div class="src">Linear — information density</div>
+        <h4>What to steal</h4>
+        <ul>
+          <li>Tight rows, monospace metadata, near-monochromatic palette with a single accent.</li>
+          <li>Type tags as small pills, not big badges. The data is the design.</li>
+          <li>Cmd+K as the primary action surface; on mobile, a persistent compose affordance.</li>
+          <li>Inbox is one stream with type filters, not multiple lists.</li>
+          <li>Read/unread state as a primary visual primitive.</li>
+        </ul>
+      </div>
+      <div class="insp-card">
+        <div class="src">PagerDuty — priority &amp; action</div>
+        <h4>What to steal</h4>
+        <ul>
+          <li>Priority-color stripe on the left edge of every row. Triage state in one glance.</li>
+          <li>Acknowledge / Resolve / Escalate verbs always present. Each row knows its actions.</li>
+          <li>"On it" state — show when something is already being handled.</li>
+          <li>Snooze affordance: not "delete," but "not now."</li>
+          <li>Severity scales (P1–P4) translate to risk levels (HIGH / MED / LOW / routine).</li>
+        </ul>
+      </div>
+    </div>
+    <p>The synthesis: <em>a Linear-tight inbox where each row carries a PagerDuty-style priority stripe, a type tag, and a single dominant action.</em></p>
+  </section>
+
+  <!-- ===== CROSS-AGENT CRITIQUE (new section) ===== -->
+  <section>
+    <h2>Core concept · cross-agent critique</h2>
+    <p>Power users have already discovered this workflow: ask Codex <svg class="ico ico-codex"><use href="#codex-mark"/></svg> to draft a plan; paste it into Claude <svg class="ico ico-claude"><use href="#claude-mark"/></svg> for review; iterate; then dispatch. It works for three structural reasons:</p>
+    <ul>
+      <li><b>Different harnesses have orthogonal priors.</b> Errors one would miss, the other catches.</li>
+      <li><b>The critic isn't invested.</b> It didn't write the plan, so it has no confirmation bias to defend.</li>
+      <li><b>Plans are cheap.</b> Killing a bad plan costs $0.05; killing a bad implementation costs $0.50 + 15 minutes.</li>
+    </ul>
+    <p>Loupe productizes this loop. It appears as an <em>opt-in toggle</em> under the "Plan &amp; dispatch" mode in the dispatch sheet. When enabled: planner emits the plan, critic reviews it, you see both in a single annotated document, you approve (with edits if needed), the implementer codes with both plan + accepted critique as first-class context.</p>
+    <p>This is also the v1.1 path for the PR review surface: when a ticket was parallel-dispatched, the recommendation card becomes a <em>meta-review</em> — *where the two agents agree*, you skim; *where they disagree*, you spend attention. Disagreement is the highest-signal element in the whole product.</p>
+  </section>
+
+  <section>
+    <h2>The product, surface by surface</h2>
+    <table class="feature-table">
+      <thead>
+        <tr>
+          <th>Surface</th>
+          <th>Job</th>
+          <th>Key affordances</th>
+          <th>v1</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="surface">1. Inbox</td>
+          <td>Single stream of tickets, running agents, and ready PRs</td>
+          <td>Priority sort · type filter tabs · swipe actions · pull-to-refresh</td>
+          <td><span class="v in">IN</span></td>
+        </tr>
+        <tr>
+          <td class="surface">2. Dispatch sheet</td>
+          <td>Open from a ticket; pick mode + agent; fire</td>
+          <td>Three modes (Dispatch / Plan &amp; dispatch / Send to me) · second-opinion toggle · agent picker with cost estimates · constraint field</td>
+          <td><span class="v in">IN</span></td>
+        </tr>
+        <tr>
+          <td class="surface">3. Plan review</td>
+          <td>(Plan-and-dispatch) approve the agent's plan, optionally with a second-agent critique</td>
+          <td>Markdown plan · inline edits · critic notes pinned to sections · adopt/dismiss per note · approve / re-plan</td>
+          <td><span class="v in">IN</span></td>
+        </tr>
+        <tr>
+          <td class="surface">4. Live agent view</td>
+          <td>Watch a running agent; steer or stop</td>
+          <td>Live step stream · cost so far · steering message · stop</td>
+          <td><span class="v in">IN</span></td>
+        </tr>
+        <tr>
+          <td class="surface">5. PR review (wedge)</td>
+          <td>Decide on an agent-authored PR</td>
+          <td>Recommendation card · question-driven body · 4-verb actions · risk-weighted diff entry · replay tab</td>
+          <td><span class="v in">IN</span></td>
+        </tr>
+        <tr>
+          <td class="surface">6. Comparison view</td>
+          <td>Side-by-side review when parallel-dispatched</td>
+          <td>Two PRs · pick one (other closes) · meta-review where they agree/disagree</td>
+          <td><span class="v in">IN</span></td>
+        </tr>
+        <tr>
+          <td class="surface">7. Settings: JIRA</td>
+          <td>OAuth, project ↔ repo binding, auto-dispatch label</td>
+          <td>Per-project toggles · default agent · ticket-transition rules</td>
+          <td><span class="v in">IN</span></td>
+        </tr>
+        <tr>
+          <td class="surface">8. Settings: Keys</td>
+          <td>Connect API keys; see spend</td>
+          <td>Anthropic + OpenAI key fields · aggregated month spend + burn rate</td>
+          <td><span class="v in">IN</span></td>
+        </tr>
+        <tr>
+          <td class="surface">9. Trust profile</td>
+          <td>Per-agent / per-role trust over time</td>
+          <td>Acceptance rate · planner-trust · critic-trust · common failure modes</td>
+          <td><span class="v next">v1.1</span></td>
+        </tr>
+        <tr>
+          <td class="surface">10. Search / palette</td>
+          <td>Find any PR, ticket, or session</td>
+          <td>Linear-style command palette (mobile: bottom sheet)</td>
+          <td><span class="v next">v1.1</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ===== 1. INBOX ===== -->
+  <section>
+    <h2>1 · Inbox</h2>
+    <p>One stream. Type is a tag, not a separate view. Sorted by <em>attention need</em>: HIGH-risk ready PRs → MED → routine → running agents → tickets pending dispatch.</p>
+
+    <div class="mockup-wrap">
+      <div class="mockup-caption">Mockup · Inbox</div>
+      <div class="phone">
+        <div class="statusbar"><span>9:42</span><span>● ● ●</span></div>
+        <div class="navbar">
+          <div class="brand"><span class="brand-mark"></span>Loupe</div>
+          <div class="nav-actions">
+            <span style="font-size: 16px;">⌕</span>
+            <span style="font-size: 16px;">+</span>
+          </div>
+        </div>
+
+        <div class="summary-strip">
+          <div class="item"><div class="lbl">Spend · MTD</div><div class="val">$47.18</div></div>
+          <div class="item"><div class="lbl">Running</div><div class="val live">2</div></div>
+          <div class="item"><div class="lbl">For you</div><div class="val attention">4</div></div>
+        </div>
+
+        <div class="tabs">
+          <div class="tab active">All <span class="count">11</span></div>
+          <div class="tab">PRs <span class="count">3</span></div>
+          <div class="tab">Live <span class="count">2</span></div>
+          <div class="tab">Tickets <span class="count">5</span></div>
+        </div>
+
+        <div class="inbox-section-label"><span>Awaiting you · 4</span><span>by priority</span></div>
+
+        <div class="inbox-row p-high">
+          <div class="stripe"></div>
+          <div class="body">
+            <div class="row-top">
+              <span class="typetag pr">PR</span>
+              <span class="ref">PAY-1284</span>
+              <span class="pill risk-high">HIGH</span>
+            </div>
+            <div class="title">Fix race in Stripe webhook handler</div>
+            <div class="meta">
+              <span class="agent-claude"><svg class="ico ico-claude"><use href="#claude-mark"/></svg>claude-opus-4-7</span>
+              <span>$0.42 · 9m</span>
+            </div>
+          </div>
+          <div class="swipe-hint">›</div>
+        </div>
+
+        <div class="inbox-row p-med">
+          <div class="stripe"></div>
+          <div class="body">
+            <div class="row-top">
+              <span class="typetag pr">PR</span>
+              <span class="ref">DB-117</span>
+              <span class="pill risk-med">MED</span>
+            </div>
+            <div class="title">Migrate user.email index to btree</div>
+            <div class="meta">
+              <span class="agent-claude"><svg class="ico ico-claude"><use href="#claude-mark"/></svg>claude-opus-4-7</span>
+              <span>$1.10 · 22m</span>
+            </div>
+          </div>
+          <div class="swipe-hint">›</div>
+        </div>
+
+        <div class="inbox-row p-routine">
+          <div class="stripe"></div>
+          <div class="body">
+            <div class="row-top">
+              <span class="typetag plan">PLAN</span>
+              <span class="ref">SEARCH-44</span>
+              <span class="pill" style="color: var(--purple); border-color: rgba(192,132,252,0.4);">+ critique</span>
+            </div>
+            <div class="title">Plan ready: implement search ranking v2</div>
+            <div class="meta">
+              <span class="agent-codex"><svg class="ico ico-codex"><use href="#codex-mark"/></svg>plan</span>
+              <span class="agent-claude"><svg class="ico ico-claude"><use href="#claude-mark"/></svg>critique</span>
+              <span>3m read</span>
+            </div>
+          </div>
+          <div class="swipe-hint">›</div>
+        </div>
+
+        <div class="inbox-row p-low">
+          <div class="stripe"></div>
+          <div class="body">
+            <div class="row-top">
+              <span class="typetag pr">PR</span>
+              <span class="ref">INFRA-902</span>
+              <span class="pill risk-low">LOW</span>
+            </div>
+            <div class="title">Bump 12 deps; one PR per group</div>
+            <div class="meta">
+              <span class="agent-codex"><svg class="ico ico-codex"><use href="#codex-mark"/></svg>gpt-5-codex</span>
+              <span>$0.18 · 14m</span>
+            </div>
+          </div>
+          <div class="swipe-hint">›</div>
+        </div>
+
+        <div class="inbox-section-label"><span>In flight · 2</span><span></span></div>
+
+        <div class="inbox-row p-low">
+          <div class="stripe" style="background: var(--info);"></div>
+          <div class="body">
+            <div class="row-top">
+              <span class="typetag run">RUN</span>
+              <span class="ref">DATA-71</span>
+              <span class="pill" style="color: var(--info); border-color: rgba(96,165,250,0.4);">auto</span>
+            </div>
+            <div class="title">Add error retry to ingest pipeline</div>
+            <div class="meta">
+              <span><span class="live-dot"></span><span class="agent-codex"><svg class="ico ico-codex"><use href="#codex-mark"/></svg>gpt-5-codex</span></span>
+              <span>$0.07 · 4m</span>
+            </div>
+            <div class="progress"><div style="width: 22%"></div></div>
+          </div>
+          <div class="swipe-hint">›</div>
+        </div>
+
+        <div class="inbox-row p-low">
+          <div class="stripe" style="background: var(--warn);"></div>
+          <div class="body">
+            <div class="row-top">
+              <span class="typetag run">RUN</span>
+              <span class="ref">SEC-22</span>
+              <span class="pill" style="color: var(--warn); border-color: rgba(251,191,36,0.4);">parallel</span>
+            </div>
+            <div class="title">Rate-limit signup endpoint</div>
+            <div class="meta">
+              <span><span class="live-dot"></span><span class="agent-both"><svg class="ico ico-claude"><use href="#claude-mark"/></svg><svg class="ico ico-codex"><use href="#codex-mark"/></svg>both</span></span>
+              <span>$0.61 · 6m</span>
+            </div>
+            <div class="progress"><div style="width: 64%"></div></div>
+          </div>
+          <div class="swipe-hint">›</div>
+        </div>
+
+        <div class="inbox-section-label"><span>Tickets · 5 open</span><span>P-level</span></div>
+
+        <div class="inbox-row p-med">
+          <div class="stripe"></div>
+          <div class="body">
+            <div class="row-top">
+              <span class="typetag tkt">TKT</span>
+              <span class="ref">BILL-308</span>
+              <span class="pill" style="color: var(--warn);">P2</span>
+            </div>
+            <div class="title">Add /healthz endpoint to billing service</div>
+            <div class="meta"><span>assigned to you · 2d</span></div>
+          </div>
+          <div class="swipe-hint">›</div>
+        </div>
+
+        <div class="inbox-row p-low">
+          <div class="stripe"></div>
+          <div class="body">
+            <div class="row-top">
+              <span class="typetag tkt">TKT</span>
+              <span class="ref">INFRA-1011</span>
+              <span class="pill" style="color: var(--info);">P3</span>
+            </div>
+            <div class="title">Update Terraform provider to 1.8</div>
+            <div class="meta"><span>assigned to you · 5d</span></div>
+          </div>
+          <div class="swipe-hint">›</div>
+        </div>
+
+        <div class="tabbar">
+          <div class="item active"><span class="ico-sq"></span>Inbox</div>
+          <div class="item"><span class="ico-sq"></span>Tickets</div>
+          <div class="item"><span class="ico-sq"></span>Trust</div>
+          <div class="item"><span class="ico-sq"></span>You</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 2. DISPATCH ===== -->
+  <section>
+    <h2>2 · Dispatch sheet</h2>
+    <p>Opens when the user taps a ticket. Three modes. When Plan &amp; dispatch is selected, a second-opinion toggle becomes available. Then agent. Then fire.</p>
+
+    <h4>The three modes</h4>
+    <ul>
+      <li><b>Dispatch</b> — agent goes immediately with the ticket as brief. For routine, well-scoped work.</li>
+      <li><b>Plan &amp; dispatch</b> — agent emits a markdown plan first. You approve or edit. Only then does it code. Optional sub-feature: <em>second opinion</em>, where a different agent reviews the plan before you approve.</li>
+      <li><b>Send to me</b> — mark the ticket as mine. Mutes in Loupe, leaves the ticket in JIRA. Loupe never becomes a to-do list.</li>
+    </ul>
+
+    <div class="mockup-wrap">
+      <div class="mockup-caption">Mockup · Dispatch sheet · Plan &amp; dispatch with second opinion enabled</div>
+      <div class="dispatch-frame">
+        <div class="topbar">
+          <div>
+            <div class="title">Dispatch</div>
+            <div class="sub">SEARCH-44 · search-svc</div>
+          </div>
+          <div class="close">✕</div>
+        </div>
+
+        <div class="ticket-summary">
+          <div class="label">From JIRA</div>
+          <div class="body">Implement learned re-ranking on top of BM25 retrieval. Improve NDCG@10. Latency budget: p95 under 250ms. Open-ended on approach.</div>
+        </div>
+
+        <div class="mode-choice">
+          <div class="mode-ico">→</div>
+          <div>
+            <div class="mode-name">Dispatch now</div>
+            <div class="mode-desc">Agent works the ticket directly</div>
+          </div>
+          <div class="mode-cost">≈ $0.30–0.90</div>
+        </div>
+
+        <div class="mode-choice selected">
+          <div class="mode-ico">◐</div>
+          <div>
+            <div class="mode-name">Plan &amp; dispatch</div>
+            <div class="mode-desc">Agent emits plan first; you approve before code</div>
+          </div>
+          <div class="mode-cost">+ ~$0.05</div>
+        </div>
+
+        <div class="sub-toggle">
+          <div class="label-block">
+            <div class="name">Second opinion <span style="color:var(--text-dim);font-family:var(--mono);font-size:10px;">· recommended for open-ended tickets</span></div>
+            <div class="desc">A different agent critiques the plan before you approve. Disagreements surface as comments you can adopt or dismiss.</div>
+          </div>
+          <div class="swt"></div>
+        </div>
+
+        <div class="mode-choice">
+          <div class="mode-ico">◯</div>
+          <div>
+            <div class="mode-name">Send to me</div>
+            <div class="mode-desc">I'll handle this one. Mutes in Loupe.</div>
+          </div>
+          <div class="mode-cost">—</div>
+        </div>
+
+        <div class="agent-picker">
+          <div class="label"><span>Planner / Implementer</span><span></span></div>
+          <div class="agent-segment">
+            <div class="opt">
+              <div class="name claude-c"><svg class="ico ico-claude"><use href="#claude-mark"/></svg>Claude</div>
+              <div class="est">≈ $0.42</div>
+            </div>
+            <div class="opt selected">
+              <div class="name codex-c"><svg class="ico ico-codex"><use href="#codex-mark"/></svg>Codex</div>
+              <div class="est cheap">≈ $0.21</div>
+            </div>
+            <div class="opt">
+              <div class="name"><svg class="ico ico-claude"><use href="#claude-mark"/></svg><svg class="ico ico-codex"><use href="#codex-mark"/></svg>Both</div>
+              <div class="est">≈ $0.63</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="second-opinion-picker">
+          <div class="label">Second opinion · roles</div>
+          <div class="so-row">
+            <div class="role">
+              <div class="role-label">Planner</div>
+              <div class="agent codex-c"><svg class="ico ico-codex"><use href="#codex-mark"/></svg>Codex</div>
+            </div>
+            <div class="arrow">→</div>
+            <div class="role">
+              <div class="role-label">Critic</div>
+              <div class="agent claude-c"><svg class="ico ico-claude"><use href="#claude-mark"/></svg>Claude</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dispatch-cta">Plan with second opinion →</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 3. PLAN REVIEW ===== -->
+  <section>
+    <h2>3 · Plan review · two-agent critique</h2>
+    <p>The pivot when Plan &amp; dispatch is used. Default tab is <b>Combined</b>: plan and critic comments interleaved, each comment pinned to the section it's about. Adopt or dismiss each note individually — adopted notes become first-class constraints for the implementer; dismissed notes don't.</p>
+    <p>This is where intent misreads die at minute 2 instead of minute 9. The agent that <em>didn't</em> write the plan is the one most likely to catch what the planner missed — it has no skin in the plan being right.</p>
+
+    <div class="mockup-wrap">
+      <div class="mockup-caption">Mockup · Plan review · Codex's plan, Claude's critique</div>
+      <div class="plan-frame">
+        <div class="topbar">
+          <div class="title-row">
+            <div class="title">Review plan</div>
+            <div class="close" style="color:var(--text-dim);">✕</div>
+          </div>
+          <div class="sub">
+            <span class="ref" style="color:var(--jira);">SEARCH-44</span>
+            <span class="agent-tag codex"><svg class="ico ico-codex"><use href="#codex-mark"/></svg>Codex planner</span>
+            <span class="vs">·</span>
+            <span class="agent-tag claude"><svg class="ico ico-claude"><use href="#claude-mark"/></svg>Claude critic</span>
+          </div>
+        </div>
+
+        <div class="plan-mode-tabs">
+          <div class="pt active">Combined</div>
+          <div class="pt">Plan</div>
+          <div class="pt">Critique</div>
+        </div>
+
+        <div class="plan-body">
+          <h4>Approach</h4>
+          <p>Add a learned re-ranking layer on top of BM25. Train a lightweight cross-encoder on the existing click logs from <code>search_events</code>. <span class="del">Deploy as a separate service.</span><span class="ins"> Run in-process — no new service.</span></p>
+
+          <div class="critique-note">
+            <div class="critic-tag"><svg class="ico ico-claude"><use href="#claude-mark"/></svg>Claude · concern</div>
+            <div class="critic-body">Click logs are biased toward already-promoted results. Training on them without sampling correction will reinforce existing rankings. Suggest adding inverse-propensity weighting, or holding out a small randomization slice.</div>
+            <div class="critic-actions">
+              <span class="chip adopt">✓ Adopt</span>
+              <span class="chip dismiss">✗ Dismiss</span>
+            </div>
+          </div>
+
+          <h4>Files I'll touch</h4>
+          <ul>
+            <li><code>search/ranker.py</code> — new module</li>
+            <li><code>search/api.py</code> — wire ranker into search path</li>
+            <li><code>search/eval.py</code> — offline eval script</li>
+            <li><code>tests/search/test_ranker.py</code> — new tests</li>
+            <li class="added-by-critic"><code>search/cache.py</code> — cache invalidation</li>
+          </ul>
+
+          <div class="critique-note">
+            <div class="critic-tag"><svg class="ico ico-claude"><use href="#claude-mark"/></svg>Claude · missed file</div>
+            <div class="critic-body">The plan doesn't touch <code>search/cache.py</code>, but the existing search cache is keyed on BM25 output. Adding a re-ranker invalidates that cache for all queries — needs explicit handling.</div>
+            <div class="critic-actions">
+              <span class="chip adopt">✓ Adopted</span>
+              <span class="chip">↶ Undo</span>
+            </div>
+          </div>
+
+          <h4>Risks I see</h4>
+          <ul>
+            <li>Latency: cross-encoder adds ~30ms. <span class="ins">Cap p95 at 250ms; fall back to BM25 if over.</span></li>
+            <li>Training data is biased toward already-promoted results.</li>
+          </ul>
+
+          <h4>Done when</h4>
+          <ul>
+            <li>Offline NDCG@10 improves by ≥5% on held-out set.</li>
+            <li>P95 latency stays under 250ms.</li>
+          </ul>
+
+          <div class="critique-note">
+            <div class="critic-tag"><svg class="ico ico-claude"><use href="#claude-mark"/></svg>Claude · suggestion</div>
+            <div class="critic-body">"Done when" only covers offline + latency. Suggest adding an online A/B success criterion before merging to main — even if it's just a small canary cohort.</div>
+            <div class="critic-actions">
+              <span class="chip adopt">✓ Adopt</span>
+              <span class="chip dismiss">✗ Dismiss</span>
+            </div>
+          </div>
+
+          <div style="margin-top: 12px; padding: 10px 12px; background: var(--surface-2); border-radius: 6px; font-size: 11.5px; color: var(--text-dim);">
+            <span style="color: var(--accent); font-family: var(--mono); font-size: 10px;">2 ADOPTED</span> · <span style="font-family: var(--mono); font-size: 10px;">1 PENDING</span> — all adopted notes become constraints for the implementer.
+          </div>
+        </div>
+
+        <div class="plan-actions">
+          <div class="btn">Re-plan</div>
+          <div class="btn primary">Approve &amp; code →</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 4. LIVE ===== -->
+  <section>
+    <h2>4 · Live agent view</h2>
+    <p>Tap a running agent. See current step, what it's read, what it's about to do. Send a one-line steering message. Stop it cold.</p>
+
+    <div class="mockup-wrap">
+      <div class="mockup-caption">Mockup · Live agent view · parallel run</div>
+      <div class="live-frame">
+        <div class="topbar">
+          <div class="title">Rate-limit signup endpoint</div>
+          <div class="sub">
+            <span class="ref" style="color:var(--jira);">SEC-22</span> · parallel:
+            <span class="agent-claude"><svg class="ico ico-claude"><use href="#claude-mark"/></svg>claude</span> +
+            <span class="agent-codex"><svg class="ico ico-codex"><use href="#codex-mark"/></svg>codex</span>
+            · 6m
+          </div>
+        </div>
+        <div class="live-meta">
+          <div><div class="lbl">Cost</div><div class="val">$0.61</div></div>
+          <div><div class="lbl">Progress</div><div class="val">64%</div></div>
+          <div><div class="lbl">ETA</div><div class="val">~3m</div></div>
+        </div>
+        <div class="live-stream">
+          <div class="step"><span class="ico-step">✓</span> Read AGENTS.md and project structure</div>
+          <div class="step"><span class="ico-step">✓</span> Found auth/signup.ts and rate-limit middleware</div>
+          <div class="step"><span class="ico-step">✓</span> Wrote initial implementation using token bucket</div>
+          <div class="step"><span class="ico-step">✓</span> Added 4 new tests</div>
+          <div class="step cur"><span class="ico-step">◐</span> Running test suite</div>
+          <div class="step" style="opacity: 0.5;"><span class="ico-step">○</span> Will: open PR</div>
+        </div>
+        <div class="action-bar">
+          <div class="act-btn"><span class="verb">Stop</span>Cancel both</div>
+          <div class="act-btn primary"><span class="verb">Steer</span>Send a message</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 5. PR REVIEW ===== -->
+  <section>
+    <h2>5 · PR review · the wedge</h2>
+    <p>Built on three composable ideas:</p>
+    <ul>
+      <li><b>Layered briefing</b> — the agent commits to a recommendation at the top. Confidence + the single thing worth reading. The rest is opt-in depth.</li>
+      <li><b>Question-driven body</b> — instead of seven prose sections, the body is a list of questions a reviewer would ask. Each row is yes/no/unknown with one-tap expansion to evidence.</li>
+      <li><b>Risk-weighted diff entry</b> — when the user opens code, they enter through risk, not file tree.</li>
+    </ul>
+
+    <p>Reviewers optimize <em>confidence per minute spent</em>. The diff is uniform — every line equal visual weight. The recommendation + question list collapses the surface into a *scannable decision* on mobile, with depth available on demand.</p>
+
+    <div class="mockup-wrap">
+      <div class="mockup-caption">Mockup · PR review</div>
+      <div class="pr-frame">
+        <div class="pr-topbar">
+          <span class="back">‹</span>
+          <div class="breadcrumb">
+            Inbox / <span class="pill" style="color: var(--accent); border-color: rgba(74,222,128,0.4);">PR</span> <span class="pill" style="color: var(--jira); border-color: rgba(38,132,255,0.4);">PAY-1284</span>
+          </div>
+        </div>
+
+        <div class="pr-title-block">
+          <h2>Fix race condition in Stripe webhook handler</h2>
+          <div class="submeta">
+            <span class="agent-tag claude"><svg class="ico ico-claude"><use href="#claude-mark"/></svg>claude-opus-4-7</span>
+            <span>9m</span>
+            <span>$0.42</span>
+            <span>+47 / −3</span>
+          </div>
+        </div>
+
+        <div class="rec-card">
+          <div class="rec-head">Agent's recommendation</div>
+          <div class="rec-verdict">Accept &amp; merge. I'm <em>moderately</em> confident — read line 42–68 before you do.</div>
+          <div class="rec-explain">Concurrency dupes eliminated via pg advisory lock. Serial-retry behavior unchanged. No new dependency. One unverified case: Postgres failover during the lock — needs staging.</div>
+          <div class="rec-stats">
+            <span class="pill confidence-med">CONFIDENCE: MED</span>
+            <span class="pill risk-high">1 HIGH</span>
+            <span class="pill risk-med">1 MED</span>
+            <span class="pill">1 UNKNOWN</span>
+          </div>
+          <div class="read-this">
+            <span class="label">Read this →</span>
+            <span class="target">route.ts:42–68</span>
+          </div>
+        </div>
+
+        <div class="q-list">
+          <div class="q-section-label">Reviewer questions · 7</div>
+
+          <div class="q-row">
+            <span class="verdict yes">✓</span>
+            <div>
+              <div class="q-text">Did the agent solve the right problem?</div>
+              <div class="q-evidence">restates intent · single ambiguity flagged + resolved</div>
+            </div>
+            <span class="chevron">›</span>
+          </div>
+
+          <div class="q-row expanded">
+            <span class="verdict warning">!</span>
+            <div>
+              <div class="q-text">Is the locking approach sound?</div>
+              <div class="q-evidence">pg advisory lock · alternatives ruled out</div>
+            </div>
+            <span class="chevron">⌄</span>
+            <div class="expansion">
+              Chose <code>pg_advisory_xact_lock(hashtext(event_id))</code>. The row doesn't exist yet at contention time, so <code>SELECT FOR UPDATE</code> can't help. Rejected: Redis (no new deps); table lock (too coarse). Hash collisions are vanishingly rare and don't affect correctness.
+              <span class="evid-link">→ route.ts:42–68 (HIGH risk hunk)</span>
+            </div>
+          </div>
+
+          <div class="q-row">
+            <span class="verdict yes">✓</span>
+            <div>
+              <div class="q-text">Does serial-retry behavior still work?</div>
+              <div class="q-evidence">test passes · same code path, no change</div>
+            </div>
+            <span class="chevron">›</span>
+          </div>
+
+          <div class="q-row">
+            <span class="verdict yes">✓</span>
+            <div>
+              <div class="q-text">Are the new tests sufficient?</div>
+              <div class="q-evidence">2 new tests · concurrent same-id and concurrent different-id</div>
+            </div>
+            <span class="chevron">›</span>
+          </div>
+
+          <div class="q-row">
+            <span class="verdict unknown">?</span>
+            <div>
+              <div class="q-text">What if Postgres fails over mid-lock?</div>
+              <div class="q-evidence">declared as known unknown · needs staging</div>
+            </div>
+            <span class="chevron">›</span>
+          </div>
+
+          <div class="q-row">
+            <span class="verdict yes">✓</span>
+            <div>
+              <div class="q-text">Did the agent introduce any new dependency?</div>
+              <div class="q-evidence">no — only Postgres primitives</div>
+            </div>
+            <span class="chevron">›</span>
+          </div>
+
+          <div class="q-row">
+            <span class="verdict yes">✓</span>
+            <div>
+              <div class="q-text">Was the core charging logic touched?</div>
+              <div class="q-evidence">no — wrapper around processStripeEvent()</div>
+            </div>
+            <span class="chevron">›</span>
+          </div>
+        </div>
+
+        <div style="padding: 14px 16px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; color: var(--text-dim);">
+          <span>Open diff (2 files, +47 / −3)</span>
+          <span style="color: var(--info);">via risk map →</span>
+        </div>
+
+        <div class="action-bar">
+          <div class="act-btn primary">
+            <span class="verb">Accept</span>
+            Merge &amp; close PAY-1284
+          </div>
+          <div class="act-btn">
+            <span class="verb">+ Follow-ups</span>
+            Wire metric to dashboard
+          </div>
+          <div class="act-btn">
+            <span class="verb">Reject + constraint</span>
+            Use Redis instead
+          </div>
+          <div class="act-btn">
+            <span class="verb">Ask</span>
+            What if PG fails over?
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h4>v1.1 · cross-agent meta-review at PR stage</h4>
+    <p>Same pattern as plan critique, applied to the PR: implementer (Agent A) writes the code and emits its self-assessment. Critic (Agent B), seeing only the diff and the original intent, emits its own read. The recommendation card becomes a meta-review — where they agree, you skim; where they disagree, you spend attention. Disagreement is the highest-signal element in the entire product.</p>
+  </section>
+
+  <!-- ===== 6. COMPARISON ===== -->
+  <section>
+    <h2>6 · Comparison view</h2>
+    <p>When a ticket was parallel-dispatched, opening it lands here. Two recommendation cards. Two cost numbers. Two contracts. Pick one — the other closes.</p>
+
+    <div class="mockup-wrap">
+      <div class="mockup-caption">Mockup · Comparison view</div>
+      <div class="pr-frame">
+        <div class="pr-topbar">
+          <span class="back">‹</span>
+          <div class="breadcrumb">
+            Compare · <span class="pill" style="color: var(--jira); border-color: rgba(38,132,255,0.4);">SEC-22</span>
+          </div>
+        </div>
+        <div class="pr-title-block">
+          <h2>Rate-limit signup endpoint</h2>
+          <div class="submeta"><span>Parallel dispatch · both ready</span></div>
+        </div>
+        <div class="compare-row">
+          <div class="col claude">
+            <div class="agent-tag"><svg class="ico ico-claude"><use href="#claude-mark"/></svg>Claude Opus 4.7</div>
+            <div class="verdict">Token bucket per-IP in Redis; window 1m.</div>
+            <div class="stats">
+              <span class="pill confidence-high">conf: HIGH</span>
+              <span class="pill risk-low">risk: LOW</span>
+              <span>$0.31</span>
+              <span>+62 / −4</span>
+            </div>
+          </div>
+          <div class="col codex">
+            <div class="agent-tag"><svg class="ico ico-codex"><use href="#codex-mark"/></svg>GPT-5 Codex</div>
+            <div class="verdict">Leaky bucket per-IP, in-process; persisted in pg.</div>
+            <div class="stats">
+              <span class="pill confidence-med">conf: MED</span>
+              <span class="pill risk-med">risk: MED</span>
+              <span>$0.18</span>
+              <span>+98 / −7</span>
+            </div>
+          </div>
+        </div>
+        <div style="padding: 16px; border-top: 1px solid var(--border); font-size: 13px; color: var(--text-dim);">
+          Claude reused the existing Redis client. Codex took a heavier path (new pg table). Both pass tests.
+        </div>
+        <div class="action-bar">
+          <div class="act-btn primary"><span class="verb">Pick Claude</span>Accept &amp; merge</div>
+          <div class="act-btn"><span class="verb">Pick Codex</span>Accept &amp; merge</div>
+          <div class="act-btn"><span class="verb">Reject both</span>Re-dispatch with notes</div>
+          <div class="act-btn"><span class="verb">Open detail</span>Full PR side-by-side</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="compact">
+    <h2>JIRA integration</h2>
+    <ul>
+      <li>Atlassian OAuth 2.0 (JIRA Cloud only v1). Pull issues assigned to user across visible projects.</li>
+      <li>Configure per-project repo binding in settings. Loupe passes the repo context at dispatch.</li>
+      <li>Auto-dispatch trigger: JIRA label <code>loupe:auto</code> applied opt-in by the user.</li>
+      <li>Round-trip: comment on the source ticket when PR opens; on accept, transition per-project rule (default: don't transition).</li>
+    </ul>
+  </section>
+
+  <section class="compact">
+    <h2>BYO keys &amp; spend</h2>
+    <ul>
+      <li>User pastes Anthropic + OpenAI API keys in settings. Keys stay in the Mac bridge daemon's keychain; not synced to the phone.</li>
+      <li>Aggregated spend (this month, this hour burn rate) on the inbox summary strip. Not "remaining balance" — providers don't expose that cleanly for BYO keys; we track usage ourselves.</li>
+      <li>Per-task cost shown at dispatch (heuristic on day 1, historical-similar from week 2).</li>
+      <li>Per-PR actual cost shown in the form factor's submeta.</li>
+      <li>No auto-routing in v1. User picks.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Architecture (minimal)</h2>
+    <ul>
+      <li><b>iOS app</b> (SwiftUI) — surfaces above.</li>
+      <li><b>macOS bridge daemon</b> — holds keys in keychain, invokes Claude Code <svg class="ico ico-claude"><use href="#claude-mark"/></svg> + Codex <svg class="ico ico-codex"><use href="#codex-mark"/></svg> CLIs locally, watches GitHub, polls JIRA. Takes <code>PreventUserIdleSystemSleep</code> while an agent runs.</li>
+      <li><b>Transport</b> — WebSocket between phone and bridge, paired via QR code; X25519/Ed25519/AES-256-GCM.</li>
+      <li><b>Cloud relay (small)</b> — only for: APNS push to wake the phone, JIRA webhook landing pad. Stateless.</li>
+      <li><b>State</b> — bridge owns truth; phone is a thin client with local cache for offline read-only.</li>
+      <li><b>Form-factor generation</b> — bridge asks the harness for structured output where possible, post-processes with a cheap LLM call to fill recommendation + question list + risk flags. Hybrid. Needs a spike.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>v1 scope</h2>
+    <div class="scope-grid">
+      <div class="scope-card">
+        <h4>In</h4>
+        <ul>
+          <li>iOS app + macOS bridge daemon.</li>
+          <li>JIRA Cloud OAuth; manual + label-triggered (<code>loupe:auto</code>) dispatch.</li>
+          <li>Three dispatch modes: Dispatch / Plan &amp; dispatch / Send to me.</li>
+          <li>Second-opinion toggle on Plan &amp; dispatch with cross-agent critique.</li>
+          <li>Claude Code <svg class="ico ico-claude"><use href="#claude-mark"/></svg> + Codex <svg class="ico ico-codex"><use href="#codex-mark"/></svg> via BYO keys.</li>
+          <li>PR review form factor: recommendation + question-driven body + 4-verb action bar.</li>
+          <li>Plan review with inline edit + critic notes (adopt/dismiss).</li>
+          <li>Live agent view with steering message.</li>
+          <li>Comparison view for parallel dispatch.</li>
+          <li>GitHub round-trip: open PRs, comment back, transition JIRA per rule.</li>
+        </ul>
+      </div>
+      <div class="scope-card">
+        <h4>Out</h4>
+        <ul>
+          <li>Android, web, watch.</li>
+          <li>Linear, Shortcut, plain GitHub Issues.</li>
+          <li>JIRA Data Center / on-prem.</li>
+          <li>Cloud execution of agents.</li>
+          <li>Auto-routing across providers.</li>
+          <li>Workflow templates beyond ticket-→-PR.</li>
+          <li>Standup notes, chat, Slack integration.</li>
+          <li>Teams, RBAC, shared billing, audit logs.</li>
+          <li>Reselling tokens, in-app top-ups.</li>
+          <li>Agents other than Claude Code and Codex.</li>
+          <li>Cross-agent critique at PR stage (v1.1).</li>
+          <li>Trust profile surface (data collection in v1; surface in v1.1).</li>
+          <li>Spatial risk-map diff entry (ships as ordered list in v1).</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Build order</h2>
+    <ol>
+      <li><b>Bridge daemon + auth.</b> macOS daemon, QR pair to phone, BYO key storage, can shell out to Claude Code with a prompt.</li>
+      <li><b>Dispatch + Live view.</b> Free-form task from phone → agent runs locally → steps stream back.</li>
+      <li><b>Form-factor generation pipeline.</b> Recommendation + question list generation from real PRs. Deepest unknown — spike <em>first</em>. Includes confidence-calibration validation.</li>
+      <li><b>PR review surface.</b> Render the form factor. Wire 4-verb actions to GitHub.</li>
+      <li><b>Inbox.</b> Real data, type filters, swipe actions, priority sort.</li>
+      <li><b>JIRA integration.</b> OAuth, ticket pull, dispatch sheet from a ticket, round-trip.</li>
+      <li><b>Plan-and-dispatch (single agent).</b> Plan generation, plan review surface, inline edits.</li>
+      <li><b>Second-opinion mode.</b> Layer the critic agent on top of plan-and-dispatch; build the critique notes UI.</li>
+      <li><b>Parallel dispatch + comparison view.</b></li>
+    </ol>
+    <p>Step 3 is the make-or-break. Honest confidence calibration ("when I say HIGH, I mean it") is part engineering, part prompt research. Budget 2 weeks. If it fails, the wedge is in doubt and the rest of the plan changes.</p>
+  </section>
+
+  <section>
+    <h2>Risks</h2>
+    <div class="callout danger">
+      <div class="callout-title">Biggest risk</div>
+      <p>The form factor is theoretically compelling and could test undecided in practice. Validation: does a design partner who tried it once prefer it over scrolling GitHub for the next agent PR? If they don't, unprompted, by week two — the wedge is wrong, and we want to know before we polish the rest.</p>
+    </div>
+    <ul>
+      <li><b>Recommendation calibration drift.</b> If "HIGH confidence" doesn't predict "reviewer accepts without changes ≥80% of the time," trust erodes fast. Continuous validation against design-partner data is mandatory, not optional.</li>
+      <li><b>Lazy critic.</b> A second-opinion mode where the critic produces "looks good to me" is worse than no critique — it gives false confidence. Prompting must force the critic to either find something concrete or explicitly state "no concerns" (and that explicit statement should be rare enough to mean something). Measure: % of critique runs that produce ≥1 adopted note. If under ~40%, the critic is being lazy.</li>
+      <li><b>Vendor encroachment.</b> Cursor Glass, Atlassian Rovo, Claude Dispatch, Codex Mobile all play in adjacent territory. Loupe survives only if the cross-harness review surface is meaningfully better than any vendor's single-harness surface.</li>
+      <li><b>JIRA Cloud workflow variance.</b> Different orgs configure transitions wildly differently. Default: comment only, never transition. Transitions opt-in per project.</li>
+      <li><b>BYO-key onboarding friction.</b> Two API keys before the first PR review feels heavy. Mitigation: strong first-run that shows one magic-moment review before asking for the second key.</li>
+      <li><b>Cost estimate trust.</b> Two wrong estimates and users stop trusting the wallet. Be honest with ranges, sample size in tooltip.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Open questions</h2>
+    <ul>
+      <li><b>Surface: mobile-first or web-first?</b> This PRD assumes mobile-first. Web-first would simplify dispatch and JIRA + lose the mobile wedge. Decide before code lands.</li>
+      <li><b>Recommendation generation: structured prompt, post-processing, or hybrid?</b> Likely hybrid. 1-week spike on real PRs from Claude Code and Codex.</li>
+      <li><b>Reject-with-constraint plumbing.</b> Both harnesses support session resume; less clear how rejection rationale lands as first-class context vs another message.</li>
+      <li><b>Diff viewing on mobile.</b> v1: ordered hunk list. v1.1: spatial map. Long diffs: delegate to GitHub mobile.</li>
+      <li><b>Second-opinion defaults.</b> Should the toggle default ON for tickets the user marks open-ended, OFF for tickets they mark routine? Or stay always-off and let the user opt in? Test in design-partner data.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Success metrics at v1</h2>
+    <ul>
+      <li>10 design-partner engineers actively using Loupe for ≥3 ticket-→-PR cycles per week.</li>
+      <li>Median time-to-decision on a routine agent PR drops below 90 seconds.</li>
+      <li>≥30% of <em>reject-with-constraint</em> actions yield an accepted PR on the next run, without re-explaining context.</li>
+      <li>At least one design partner spontaneously says: <em>"this is where I review my agent PRs now."</em></li>
+      <li>Agent recommendation calibration: HIGH → ≥80% accept-without-changes; MED → 50–80%; LOW → flagged for full human read.</li>
+      <li>Second-opinion adopt rate: ≥40% of critique runs produce ≥1 adopted note (else the critic is being lazy).</li>
+    </ul>
+  </section>
+
+</div>
+</body>
+</html>

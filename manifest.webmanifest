@@ -1,0 +1,18 @@
+{
+  "name": "Loupe Agent Workbench",
+  "short_name": "Loupe",
+  "description": "Dispatch assigned engineering work to Mac-based coding agents and review the resulting PR from iPhone.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#111417",
+  "icons": [
+    {
+      "src": "icons/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,1262 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentOps for Software Engineers - Interactive PRD</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #111417;
+      --muted: #5b6470;
+      --line: #d9dee5;
+      --panel: #ffffff;
+      --soft: #f5f7fa;
+      --green: #10805f;
+      --green-soft: #e8f5ef;
+      --blue: #2667b8;
+      --blue-soft: #eaf1fb;
+      --red: #b8323c;
+      --red-soft: #faecee;
+      --gold: #926600;
+      --gold-soft: #fff4d9;
+      --violet: #6853c5;
+      --violet-soft: #f0edff;
+      --shadow: 0 16px 44px rgba(22, 28, 36, 0.1);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #eef2f5;
+      color: var(--ink);
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 292px minmax(0, 1fr);
+    }
+
+    aside {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 24px 18px;
+      background: #14191f;
+      color: #f8fbff;
+      overflow-y: auto;
+    }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 6px 8px 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+    }
+
+    .brand-mark {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: #f8fbff;
+      color: #14191f;
+      font-weight: 850;
+      letter-spacing: 0;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 25px;
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    .brand p {
+      margin: 0;
+      color: #c3ccd8;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    nav {
+      display: grid;
+      gap: 6px;
+      padding: 18px 0;
+    }
+
+    .nav-btn {
+      width: 100%;
+      border: 0;
+      color: #dce4ee;
+      background: transparent;
+      text-align: left;
+      padding: 11px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .nav-btn[aria-selected="true"] {
+      background: #ffffff;
+      color: #111417;
+      font-weight: 720;
+    }
+
+    .status-box {
+      margin-top: 14px;
+      padding: 14px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .status-box strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+
+    .meter {
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.16);
+      overflow: hidden;
+    }
+
+    .meter span {
+      display: block;
+      height: 100%;
+      width: 42%;
+      background: #72d2a4;
+    }
+
+    .status-box small {
+      display: block;
+      margin-top: 9px;
+      color: #c3ccd8;
+      line-height: 1.4;
+    }
+
+    main {
+      min-width: 0;
+      padding: 34px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+      gap: 20px;
+      align-items: stretch;
+      margin-bottom: 22px;
+    }
+
+    .hero-copy {
+      min-height: 276px;
+      padding: 34px;
+      background:
+        linear-gradient(120deg, rgba(38, 103, 184, 0.08), transparent 34%),
+        linear-gradient(110deg, transparent, rgba(16, 128, 95, 0.1) 74%),
+        var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 780;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .hero h2 {
+      margin: 0;
+      max-width: 820px;
+      font-size: clamp(36px, 5vw, 72px);
+      line-height: 0.96;
+      letter-spacing: 0;
+    }
+
+    .hero p {
+      margin: 0;
+      max-width: 760px;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.55;
+    }
+
+    .summary-panel {
+      background: #f7fafc;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 22px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .summary-panel h3,
+    .section h3,
+    .tile h4,
+    .callout h4 {
+      margin: 0;
+      letter-spacing: 0;
+    }
+
+    .stat-grid {
+      display: grid;
+      gap: 10px;
+    }
+
+    .stat {
+      background: #ffffff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+
+    .stat b {
+      display: block;
+      font-size: 22px;
+      line-height: 1;
+    }
+
+    .stat span {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .section {
+      display: none;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 28px;
+    }
+
+    .section.active {
+      display: block;
+    }
+
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+      margin-bottom: 22px;
+    }
+
+    .section-header p {
+      margin: 8px 0 0;
+      max-width: 780px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--soft);
+      color: #313943;
+      font-size: 12px;
+      font-weight: 720;
+      white-space: nowrap;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .grid.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grid.three {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .tile {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      background: #fff;
+    }
+
+    .tile p,
+    .tile li,
+    .callout p,
+    .callout li {
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .tile p:last-child,
+    .callout p:last-child {
+      margin-bottom: 0;
+    }
+
+    .tile h4 {
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .tag {
+      border-radius: 999px;
+      padding: 6px 9px;
+      background: var(--blue-soft);
+      color: #174d8c;
+      font-size: 12px;
+      font-weight: 680;
+    }
+
+    .callout {
+      margin: 18px 0;
+      padding: 18px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--soft);
+    }
+
+    .callout.green {
+      background: var(--green-soft);
+      border-color: #b6decc;
+    }
+
+    .callout.gold {
+      background: var(--gold-soft);
+      border-color: #efd28c;
+    }
+
+    .callout.red {
+      background: var(--red-soft);
+      border-color: #edb9be;
+    }
+
+    .workflow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(150px, 1fr));
+      gap: 12px;
+      overflow-x: auto;
+      padding-bottom: 8px;
+    }
+
+    .step {
+      min-width: 150px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 16px;
+      cursor: pointer;
+      text-align: left;
+      min-height: 160px;
+    }
+
+    .step.active {
+      border-color: #2667b8;
+      box-shadow: 0 0 0 3px rgba(38, 103, 184, 0.14);
+    }
+
+    .step-num {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: #14191f;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 780;
+      margin-bottom: 12px;
+    }
+
+    .step strong {
+      display: block;
+      margin-bottom: 8px;
+    }
+
+    .step span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .detail-panel {
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfd;
+      padding: 20px;
+    }
+
+    .detail-panel h4 {
+      margin: 0 0 8px;
+      font-size: 20px;
+    }
+
+    .detail-panel p {
+      margin-top: 0;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .priority-board {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .lane {
+      background: var(--soft);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      min-height: 320px;
+    }
+
+    .lane h4 {
+      margin: 0 0 12px;
+    }
+
+    .feature {
+      width: 100%;
+      display: block;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+      margin-bottom: 10px;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .feature strong {
+      display: block;
+      margin-bottom: 5px;
+    }
+
+    .feature span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .feature.selected {
+      border-color: var(--green);
+      box-shadow: 0 0 0 3px rgba(16, 128, 95, 0.13);
+    }
+
+    .economics {
+      display: grid;
+      grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
+      gap: 18px;
+    }
+
+    .control-panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      background: #fff;
+    }
+
+    .field {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    label {
+      font-weight: 720;
+      font-size: 13px;
+    }
+
+    input[type="range"] {
+      width: 100%;
+    }
+
+    .agent-table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 8px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+
+    .agent-table th,
+    .agent-table td {
+      text-align: left;
+      padding: 13px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+
+    .agent-table th {
+      background: #f7fafc;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #596472;
+    }
+
+    .agent-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .confidence {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-weight: 760;
+      background: var(--green-soft);
+      color: var(--green);
+    }
+
+    .risk-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .risk-item {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fff;
+    }
+
+    .severity {
+      border-radius: 999px;
+      padding: 6px 9px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 780;
+    }
+
+    .severity.high {
+      background: var(--red-soft);
+      color: var(--red);
+    }
+
+    .severity.medium {
+      background: var(--gold-soft);
+      color: var(--gold);
+    }
+
+    .severity.low {
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .risk-item h4 {
+      margin: 0 0 5px;
+    }
+
+    .risk-item p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .metric-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      padding: 16px;
+      background: #fff;
+    }
+
+    .metric b {
+      display: block;
+      font-size: 24px;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .mobile-preview {
+      max-width: 360px;
+      margin: 0 auto;
+      border: 12px solid #151a20;
+      border-radius: 34px;
+      background: #f6f8fb;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .phone-top {
+      padding: 18px 18px 10px;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .phone-top h4 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .phone-list {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .phone-card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+    }
+
+    .phone-card .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .phone-card strong {
+      font-size: 14px;
+    }
+
+    .phone-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .phone-actions {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .phone-actions button {
+      border: 1px solid var(--line);
+      background: #f8fafc;
+      border-radius: 7px;
+      min-height: 34px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 720;
+    }
+
+    .toast {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      max-width: 340px;
+      padding: 14px 16px;
+      border-radius: 8px;
+      background: #111417;
+      color: #fff;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(16px);
+      pointer-events: none;
+      transition: 180ms ease;
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 980px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        position: static;
+        height: auto;
+      }
+
+      nav {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      main {
+        padding: 20px;
+      }
+
+      .hero,
+      .economics,
+      .grid.two,
+      .grid.three,
+      .priority-board,
+      .metric-strip {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 560px) {
+      nav {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-copy,
+      .section {
+        padding: 20px;
+      }
+
+      .section-header {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <div class="brand">
+        <div class="brand-mark">AO</div>
+        <h1>AgentOps for Software Engineers</h1>
+        <p>Interactive PRD for a developer-native command center for AI coding agents.</p>
+      </div>
+      <nav aria-label="PRD sections">
+        <button class="nav-btn" aria-selected="true" data-tab="brief">01 Brief</button>
+        <button class="nav-btn" aria-selected="false" data-tab="user">02 User</button>
+        <button class="nav-btn" aria-selected="false" data-tab="workflow">03 Workflow</button>
+        <button class="nav-btn" aria-selected="false" data-tab="scope">04 Scope</button>
+        <button class="nav-btn" aria-selected="false" data-tab="cost">05 Cost Layer</button>
+        <button class="nav-btn" aria-selected="false" data-tab="ux">06 Mobile UX</button>
+        <button class="nav-btn" aria-selected="false" data-tab="risks">07 Risks</button>
+        <button class="nav-btn" aria-selected="false" data-tab="metrics">08 Metrics</button>
+      </nav>
+      <div class="status-box">
+        <strong>MVP Confidence</strong>
+        <div class="meter"><span></span></div>
+        <small>Buildable if the first release owns one narrow loop: GitHub issue to agent PR to mobile review.</small>
+      </div>
+    </aside>
+
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <div>
+            <p class="eyebrow">Product Pitch</p>
+            <h2>The control plane for AI software agents.</h2>
+          </div>
+          <p>Dispatch coding agents, monitor their runs, review their PRs, and control spend from one software-development-focused workspace. Start with the highest-frequency pain: supervising agent-generated pull requests.</p>
+        </div>
+        <div class="summary-panel">
+          <h3>PRD Snapshot</h3>
+          <div class="stat-grid">
+            <div class="stat"><b>First workflow</b><span>GitHub issue to agent PR to mobile review.</span></div>
+            <div class="stat"><b>Primary user</b><span>Senior engineers, tech leads, founders, maintainers.</span></div>
+            <div class="stat"><b>Main wedge</b><span>Development-native UX across multiple agent harnesses.</span></div>
+            <div class="stat"><b>Core promise</b><span>Less review debt, fewer lost runs, clearer spend.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="brief" class="section active">
+        <div class="section-header">
+          <div>
+            <h3>Brief</h3>
+            <p>This product should not be another chat UI. It should be the operational layer where software engineers manage agentic work: assignment, status, quality, risk, cost, and decisions.</p>
+          </div>
+          <span class="pill">Version 0.1</span>
+        </div>
+        <div class="grid three">
+          <div class="tile">
+            <h4>Problem</h4>
+            <p>Developers can now start coding agents from many places, but supervising the work is fragmented. Each run creates review debt, context debt, and cost uncertainty.</p>
+          </div>
+          <div class="tile">
+            <h4>Product Definition</h4>
+            <p>A mobile-first AgentOps cockpit for software teams: route work to agents, monitor execution, review outputs, and approve next actions.</p>
+          </div>
+          <div class="tile">
+            <h4>Initial Bet</h4>
+            <p>The first valuable loop is not writing code from a phone. It is trusting a decision about agent-generated work from a phone.</p>
+          </div>
+        </div>
+        <div class="callout green">
+          <h4>Positioning Line</h4>
+          <p><strong>AgentOps for software engineers:</strong> one developer-native command center to dispatch, monitor, review, and budget AI coding agents.</p>
+        </div>
+        <div class="callout gold">
+          <h4>Non-Sycophantic Take</h4>
+          <p>The idea is strongest as a supervision and review layer. It is weakest if it becomes a generic wrapper around Claude, ChatGPT, and GitHub. The product must create new software-specific decision surfaces, not just aggregate chats.</p>
+        </div>
+      </section>
+
+      <section id="user" class="section">
+        <div class="section-header">
+          <div>
+            <h3>User</h3>
+            <p>Start with engineers who already feel agent sprawl. They are not asking whether agents work; they are asking which ones to trust, where work stands, and what needs human judgment.</p>
+          </div>
+          <span class="pill">ICP First</span>
+        </div>
+        <div class="grid two">
+          <div class="tile">
+            <h4>Primary ICP</h4>
+            <p><strong>Agent-heavy senior engineer or founder-engineer</strong> managing multiple repos and using Claude Code, Codex, OpenCode, Cursor, or GitHub agents several times per week.</p>
+            <div class="tag-row">
+              <span class="tag">High agency</span>
+              <span class="tag">Owns review</span>
+              <span class="tag">Mobile responsive</span>
+              <span class="tag">Cost aware</span>
+            </div>
+          </div>
+          <div class="tile">
+            <h4>Secondary ICP</h4>
+            <p><strong>Tech lead or open-source maintainer</strong> who uses agents for maintenance work, review follow-ups, dependency upgrades, tests, and small bug fixes.</p>
+            <div class="tag-row">
+              <span class="tag">Queue manager</span>
+              <span class="tag">Many PRs</span>
+              <span class="tag">Trust sensitive</span>
+              <span class="tag">Async workflow</span>
+            </div>
+          </div>
+        </div>
+        <div class="callout">
+          <h4>Job To Be Done</h4>
+          <p>When I have multiple agent tasks running, I want to know what is ready, risky, blocked, or wasteful, so I can make the next engineering decision without opening my laptop.</p>
+        </div>
+        <div class="grid three">
+          <div class="tile">
+            <h4>Pain Today</h4>
+            <ul>
+              <li>Run state lives in separate tools.</li>
+              <li>PR summaries are not decision-grade.</li>
+              <li>Costs are opaque until after the run.</li>
+              <li>Mobile review is awkward and diff-first.</li>
+            </ul>
+          </div>
+          <div class="tile">
+            <h4>Trigger Moment</h4>
+            <p>The user has more than two active agent runs and cannot quickly answer which one is good, stuck, expensive, or ready to merge.</p>
+          </div>
+          <div class="tile">
+            <h4>Buyer Shape</h4>
+            <p>Individual prosumer first. Team product later after the workflow proves repeat usage and trust.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="workflow" class="section">
+        <div class="section-header">
+          <div>
+            <h3>First Workflow</h3>
+            <p>Keep the first release narrow and complete: take a GitHub issue, route it to an agent, monitor execution, summarize the PR, and let the engineer make a decision.</p>
+          </div>
+          <span class="pill">Click Steps</span>
+        </div>
+        <div class="workflow" id="workflowSteps">
+          <button class="step active" data-step="0"><span class="step-num">1</span><strong>Select work</strong><span>Pick a GitHub issue, failing test, TODO, or manually written task.</span></button>
+          <button class="step" data-step="1"><span class="step-num">2</span><strong>Route agent</strong><span>Choose harness, model, budget, branch strategy, and guardrails.</span></button>
+          <button class="step" data-step="2"><span class="step-num">3</span><strong>Monitor run</strong><span>Track plan, current action, files touched, tests, blockers, and spend.</span></button>
+          <button class="step" data-step="3"><span class="step-num">4</span><strong>Review PR</strong><span>See behavior summary, risk flags, tests, screenshots, and semantic diff.</span></button>
+          <button class="step" data-step="4"><span class="step-num">5</span><strong>Decide</strong><span>Approve, request changes, rerun tests, ask follow-up, compare, or merge.</span></button>
+        </div>
+        <div class="detail-panel" id="workflowDetail">
+          <h4>Select work</h4>
+          <p>Integrate GitHub issues first. Pull in title, description, labels, repo, affected area, and acceptance criteria. Let users write a short instruction override before dispatch.</p>
+          <div class="tag-row"><span class="tag">GitHub</span><span class="tag">Issues</span><span class="tag">Task templates</span></div>
+        </div>
+      </section>
+
+      <section id="scope" class="section">
+        <div class="section-header">
+          <div>
+            <h3>MVP Scope</h3>
+            <p>The MVP should be intentionally asymmetric: very strong at PR supervision, light at team governance, and honest about integration limits.</p>
+          </div>
+          <span class="pill">Tap Features</span>
+        </div>
+        <div class="priority-board">
+          <div class="lane">
+            <h4>Must Have</h4>
+            <button class="feature selected"><strong>GitHub issue import</strong><span>Start from a real unit of dev work.</span></button>
+            <button class="feature selected"><strong>Agent dispatch</strong><span>OpenCode or first controllable runner.</span></button>
+            <button class="feature selected"><strong>Run timeline</strong><span>Plan, actions, touched files, tests, blockers.</span></button>
+            <button class="feature selected"><strong>PR review summary</strong><span>Behavior, risk, tests, changed files, next action.</span></button>
+            <button class="feature selected"><strong>Mobile decisions</strong><span>Comment, request changes, rerun, approve, open PR.</span></button>
+          </div>
+          <div class="lane">
+            <h4>Should Have</h4>
+            <button class="feature"><strong>Cost estimate</strong><span>Pre-flight and live spend by model/provider.</span></button>
+            <button class="feature"><strong>Provider comparison</strong><span>Claude, OpenAI, local/open models where feasible.</span></button>
+            <button class="feature"><strong>Risk flags</strong><span>Auth, payments, migrations, infra, public APIs.</span></button>
+            <button class="feature"><strong>CI awareness</strong><span>Summarize failed checks and assign repair.</span></button>
+            <button class="feature"><strong>Notifications</strong><span>Only for blocked, failed, risky, or ready states.</span></button>
+          </div>
+          <div class="lane">
+            <h4>Later</h4>
+            <button class="feature"><strong>Multi-agent tournament</strong><span>Run two agents and compare outputs.</span></button>
+            <button class="feature"><strong>Team policies</strong><span>Budgets, permissions, protected areas.</span></button>
+            <button class="feature"><strong>Context packs</strong><span>Repo docs, conventions, known pitfalls.</span></button>
+            <button class="feature"><strong>Slack or Linear</strong><span>Distribution channels after the core loop works.</span></button>
+            <button class="feature"><strong>Managed credits</strong><span>Unified wallet after usage is proven.</span></button>
+          </div>
+        </div>
+      </section>
+
+      <section id="cost" class="section">
+        <div class="section-header">
+          <div>
+            <h3>Cost Layer</h3>
+            <p>Cost visibility is a useful differentiator, but the product should promise estimates and controls, not perfect prediction.</p>
+          </div>
+          <span class="pill">Interactive Estimate</span>
+        </div>
+        <div class="economics">
+          <div class="control-panel">
+            <div class="field">
+              <label for="complexity">Task complexity: <span id="complexityLabel">Medium</span></label>
+              <input id="complexity" type="range" min="1" max="5" value="3">
+            </div>
+            <div class="field">
+              <label for="context">Repository context size: <span id="contextLabel">Medium</span></label>
+              <input id="context" type="range" min="1" max="5" value="3">
+            </div>
+            <div class="field">
+              <label for="risk">Retry risk: <span id="riskLabel">Moderate</span></label>
+              <input id="risk" type="range" min="1" max="5" value="3">
+            </div>
+            <div class="callout gold">
+              <h4>Product Language</h4>
+              <p>Use "estimated burn", "budget guardrail", and "cheaper route" instead of "exact token cost". Agent loops are variable.</p>
+            </div>
+          </div>
+          <table class="agent-table" aria-label="Cost estimate by provider">
+            <thead>
+              <tr>
+                <th>Route</th>
+                <th>Estimated Burn</th>
+                <th>Best For</th>
+                <th>Confidence</th>
+              </tr>
+            </thead>
+            <tbody id="costRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="ux" class="section">
+        <div class="section-header">
+          <div>
+            <h3>Mobile UX</h3>
+            <p>The phone experience should be decision-first. Avoid shrinking a desktop IDE or GitHub diff into a small screen.</p>
+          </div>
+          <span class="pill">Prototype Feel</span>
+        </div>
+        <div class="grid two">
+          <div class="mobile-preview" aria-label="Mobile PR inbox mockup">
+            <div class="phone-top">
+              <h4>Agent PR Inbox</h4>
+            </div>
+            <div class="phone-list">
+              <div class="phone-card">
+                <div class="row"><strong>Fix billing webhook retry</strong><span class="confidence">Ready</span></div>
+                <p>3 files changed. Tests passed. Touches payment retry logic. Review recommended before merge.</p>
+                <div class="phone-actions">
+                  <button data-toast="Approved for merge queue.">Approve</button>
+                  <button data-toast="Requested focused changes from the agent.">Revise</button>
+                  <button data-toast="Opening full PR review context.">Review</button>
+                </div>
+              </div>
+              <div class="phone-card">
+                <div class="row"><strong>Upgrade date library</strong><span class="pill">Blocked</span></div>
+                <p>CI failed in timezone tests. Agent suggests two possible fixes and needs a decision.</p>
+                <div class="phone-actions">
+                  <button data-toast="Agent assigned to repair CI failure.">Repair</button>
+                  <button data-toast="Comparing a cheaper route for this task.">Compare</button>
+                  <button data-toast="Run paused.">Pause</button>
+                </div>
+              </div>
+              <div class="phone-card">
+                <div class="row"><strong>Docs for API keys</strong><span class="confidence">Low risk</span></div>
+                <p>Docs-only change. No tests required. Cost came in 31% under estimate.</p>
+                <div class="phone-actions">
+                  <button data-toast="Merged docs PR.">Merge</button>
+                  <button data-toast="Added reviewer note.">Note</button>
+                  <button data-toast="Opened changed files.">Files</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="grid">
+            <div class="tile">
+              <h4>Decision Grammar</h4>
+              <p>Each task should collapse into one recommended next action: approve, inspect, fix tests, ask human, rerun, compare, or stop.</p>
+            </div>
+            <div class="tile">
+              <h4>Review Surface</h4>
+              <p>Start with intent alignment, behavior change, risk, tests, touched files, and screenshots. Raw diff is a drill-down, not the front door.</p>
+            </div>
+            <div class="tile">
+              <h4>Notification Rule</h4>
+              <p>Notify only when a task changes decision state. Running logs should not become a new attention tax.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="risks" class="section">
+        <div class="section-header">
+          <div>
+            <h3>Risks</h3>
+            <p>The riskiest parts are not UI polish. They are trust, API access, execution reliability, and avoiding a shallow aggregator.</p>
+          </div>
+          <span class="pill">Reality Check</span>
+        </div>
+        <div class="risk-list">
+          <div class="risk-item">
+            <span class="severity high">High</span>
+            <div>
+              <h4>Native harnesses close the gap</h4>
+              <p>Claude, Codex, GitHub, and IDE vendors can add better mobile supervision. Mitigation: own cross-agent workflows, cost routing, and review grammar.</p>
+            </div>
+          </div>
+          <div class="risk-item">
+            <span class="severity high">High</span>
+            <div>
+              <h4>Integration limits</h4>
+              <p>Some proprietary harnesses may not expose full lifecycle control. Mitigation: build the deepest experience on OpenCode/self-hosted runners first and use lighter connectors elsewhere.</p>
+            </div>
+          </div>
+          <div class="risk-item">
+            <span class="severity medium">Medium</span>
+            <div>
+              <h4>Developers distrust mobile merge decisions</h4>
+              <p>Mitigation: start with low-risk tasks, excellent summaries, explicit risk flags, and easy escalation to desktop/GitHub.</p>
+            </div>
+          </div>
+          <div class="risk-item">
+            <span class="severity medium">Medium</span>
+            <div>
+              <h4>Cost estimates are noisy</h4>
+              <p>Mitigation: frame cost as a range, compare historical routes, and enforce budget caps instead of promising exact token forecasts.</p>
+            </div>
+          </div>
+          <div class="risk-item">
+            <span class="severity low">Low</span>
+            <div>
+              <h4>Too many inboxes</h4>
+              <p>Mitigation: the app should replace agent status checking, not become another place for general team chat.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="metrics" class="section">
+        <div class="section-header">
+          <div>
+            <h3>Success Metrics</h3>
+            <p>Measure whether engineers trust the product enough to make decisions, not whether they admire the concept.</p>
+          </div>
+          <span class="pill">Traction Signals</span>
+        </div>
+        <div class="metric-strip">
+          <div class="metric"><b>3+</b><span>Agent runs supervised per active user per week.</span></div>
+          <div class="metric"><b>40%</b><span>Of reviewed agent PRs get a mobile decision.</span></div>
+          <div class="metric"><b>&lt;90s</b><span>Median time from ready notification to first decision.</span></div>
+          <div class="metric"><b>25%</b><span>Reduction in abandoned or forgotten agent runs.</span></div>
+        </div>
+        <div class="grid two" style="margin-top: 14px;">
+          <div class="tile">
+            <h4>Activation</h4>
+            <p>User connects GitHub, imports an issue, dispatches one agent task, and reviews the resulting PR summary.</p>
+          </div>
+          <div class="tile">
+            <h4>Retention</h4>
+            <p>User returns because the app tells them what agent work needs a decision before GitHub, Slack, or terminal spelunking does.</p>
+          </div>
+          <div class="tile">
+            <h4>Willingness To Pay</h4>
+            <p>Users pay if the product saves senior engineering attention, prevents wasted runs, or lets them route work to cheaper capable models.</p>
+          </div>
+          <div class="tile">
+            <h4>Open Questions</h4>
+            <p>Which harness exposes enough control first? How much code review can be safely mobile-native? Is cost routing a primary wedge or retention feature?</p>
+          </div>
+        </div>
+        <div class="callout green">
+          <h4>Recommended MVP Claim</h4>
+          <p>Review, steer, and approve agent-generated PRs from your phone, with cost-aware routing across coding agents.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const navButtons = document.querySelectorAll(".nav-btn");
+    const sections = document.querySelectorAll(".section");
+
+    navButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const target = button.dataset.tab;
+        navButtons.forEach((item) => item.setAttribute("aria-selected", String(item === button)));
+        sections.forEach((section) => section.classList.toggle("active", section.id === target));
+      });
+    });
+
+    const workflowData = [
+      {
+        title: "Select work",
+        body: "Integrate GitHub issues first. Pull in title, description, labels, repo, affected area, and acceptance criteria. Let users write a short instruction override before dispatch.",
+        tags: ["GitHub", "Issues", "Task templates"]
+      },
+      {
+        title: "Route agent",
+        body: "Show a recommended route based on task type, repo risk, historical success, and budget. In MVP, support one deep runner and mark lighter integrations honestly.",
+        tags: ["OpenCode backbone", "Budget cap", "Guardrails"]
+      },
+      {
+        title: "Monitor run",
+        body: "Summarize the run as engineering state, not terminal noise: current plan step, touched files, tests attempted, failure reason, estimated burn, and blocker.",
+        tags: ["Timeline", "Live spend", "Blockers"]
+      },
+      {
+        title: "Review PR",
+        body: "Give a mobile-native review brief: intent alignment, behavior change, files grouped by purpose, tests, screenshots for UI, risky areas, and recommended next action.",
+        tags: ["Semantic diff", "Risk flags", "CI summary"]
+      },
+      {
+        title: "Decide",
+        body: "Decision buttons should be the product: approve, request changes, rerun tests, ask follow-up, compare with another route, pause, or open in GitHub.",
+        tags: ["Approve", "Revise", "Compare", "Merge"]
+      }
+    ];
+
+    const workflowSteps = document.querySelectorAll(".step");
+    const workflowDetail = document.getElementById("workflowDetail");
+
+    function renderWorkflow(index) {
+      const item = workflowData[index];
+      workflowSteps.forEach((step) => step.classList.toggle("active", step.dataset.step === String(index)));
+      workflowDetail.innerHTML = `
+        <h4>${item.title}</h4>
+        <p>${item.body}</p>
+        <div class="tag-row">${item.tags.map((tag) => `<span class="tag">${tag}</span>`).join("")}</div>
+      `;
+    }
+
+    workflowSteps.forEach((step) => {
+      step.addEventListener("click", () => renderWorkflow(Number(step.dataset.step)));
+    });
+
+    document.querySelectorAll(".feature").forEach((feature) => {
+      feature.addEventListener("click", () => feature.classList.toggle("selected"));
+    });
+
+    const labels = {
+      complexity: ["Tiny", "Small", "Medium", "Large", "Ambiguous"],
+      context: ["Tiny", "Small", "Medium", "Large", "Huge"],
+      risk: ["Low", "Some", "Moderate", "High", "Unknown"]
+    };
+
+    const routes = [
+      { name: "OpenCode + efficient model", multiplier: 0.62, best: "Docs, tests, small bugs, maintenance" },
+      { name: "Claude Code", multiplier: 1.2, best: "Ambiguous product code and refactors" },
+      { name: "Codex", multiplier: 1.05, best: "Repo-grounded implementation and PR work" },
+      { name: "Local/open model", multiplier: 0.28, best: "Low-risk repetitive tasks" }
+    ];
+
+    const complexity = document.getElementById("complexity");
+    const context = document.getElementById("context");
+    const risk = document.getElementById("risk");
+    const costRows = document.getElementById("costRows");
+
+    function estimate() {
+      const c = Number(complexity.value);
+      const x = Number(context.value);
+      const r = Number(risk.value);
+      document.getElementById("complexityLabel").textContent = labels.complexity[c - 1];
+      document.getElementById("contextLabel").textContent = labels.context[x - 1];
+      document.getElementById("riskLabel").textContent = labels.risk[r - 1];
+
+      const base = 0.55 + c * 0.42 + x * 0.28 + r * 0.34;
+      costRows.innerHTML = routes.map((route) => {
+        const low = (base * route.multiplier * 0.74).toFixed(2);
+        const high = (base * route.multiplier * 1.45).toFixed(2);
+        const confidence = r > 3 || c > 4 ? "Low" : x > 3 ? "Medium" : "High";
+        return `
+          <tr>
+            <td><strong>${route.name}</strong></td>
+            <td>$${low} - $${high}</td>
+            <td>${route.best}</td>
+            <td><span class="confidence">${confidence}</span></td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    [complexity, context, risk].forEach((input) => input.addEventListener("input", estimate));
+    estimate();
+
+    const toast = document.getElementById("toast");
+    let toastTimer;
+    document.querySelectorAll("[data-toast]").forEach((button) => {
+      button.addEventListener("click", () => {
+        toast.textContent = button.dataset.toast;
+        toast.classList.add("show");
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove("show"), 1800);
+      });
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" aria-label="Spike">
+  <rect x="2" y="2" width="20" height="20" rx="3" fill="#9097A3"/>
+  <circle cx="10.5" cy="10.5" r="3.2" fill="none" stroke="#fff" stroke-width="2"/>
+  <path d="M13 13 L17 17" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+</svg>

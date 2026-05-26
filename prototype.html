@@ -1,0 +1,1402 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Loupe — Prototype</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=Caveat:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-deep: #060814;
+      --bg-deep-2: #0a0c1c;
+      --surface: #0e1124;
+      --surface-2: #131734;
+      --surface-3: #1a1f40;
+      --border: #1d2147;
+      --border-2: #2a2f5a;
+      --cream: #f3ead0;
+      --cream-dim: #b8b29a;
+      --cream-faded: #7a7766;
+      --cream-faint: #4a4838;
+      --indigo: #4757bc;
+      --indigo-bright: #5b6cda;
+      --indigo-soft: rgba(75, 90, 200, 0.18);
+      --glow-blue: #2541e0;
+      --danger: #f47272;
+      --warn: #f5b042;
+      --info: #6088f7;
+      --accent: #58cc94;
+      --purple: #c084fc;
+      --claude: #c084fc;
+      --codex: #58cc94;
+      --jira: #6088f7;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: "Familjen Grotesk", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      --script: "Caveat", cursive;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(circle at 78% 8%, rgba(70, 90, 230, 0.10), transparent 38%),
+        linear-gradient(180deg, var(--bg-deep-2) 0%, var(--bg-deep) 100%);
+      color: var(--cream);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+      letter-spacing: -0.005em;
+    }
+
+    button { font: inherit; }
+
+    .page {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 38px 28px 72px;
+    }
+
+    .top-copy {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+      gap: 28px;
+      align-items: end;
+      margin-bottom: 28px;
+    }
+
+    .eyebrow {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--cream-faded);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(38px, 6vw, 74px);
+      line-height: 0.94;
+      letter-spacing: -0.02em;
+      font-weight: 700;
+      color: var(--cream);
+    }
+
+    .top-copy p {
+      margin: 0;
+      color: var(--cream-dim);
+      font-size: 17px;
+    }
+
+    .notes {
+      border: 1px solid var(--border);
+      background: rgba(14, 17, 36, 0.7);
+      border-radius: 12px;
+      padding: 16px 18px;
+    }
+
+    .notes strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--cream);
+      font-weight: 600;
+    }
+
+    .notes ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--cream-dim);
+      font-size: 13.5px;
+    }
+    .notes li { margin-bottom: 4px; }
+
+    .stage {
+      display: grid;
+      grid-template-columns: minmax(360px, 430px) minmax(0, 1fr);
+      gap: 28px;
+      align-items: start;
+    }
+
+    /* Phone shell */
+    .phone {
+      position: sticky;
+      top: 24px;
+      width: min(100%, 410px);
+      margin: 0 auto;
+      background: var(--surface);
+      border: 1px solid var(--border-2);
+      border-radius: 36px;
+      overflow: hidden;
+      box-shadow:
+        0 30px 80px rgba(0, 0, 0, 0.65),
+        0 1px 0 rgba(255, 255, 255, 0.04) inset;
+      position: relative;
+    }
+
+    .statusbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 22px 8px;
+      color: var(--cream);
+      font-family: var(--sans);
+      font-size: 14px;
+      font-weight: 600;
+      position: relative;
+      z-index: 2;
+    }
+    .statusbar .glyphs {
+      display: inline-flex; gap: 6px; align-items: center;
+      color: var(--cream);
+    }
+
+    /* Screen states */
+    .screen-state { display: none; }
+    .screen-state.active { display: block; }
+
+    /* ======================== LOGIN SCREEN ======================== */
+    .login-screen {
+      position: relative;
+      min-height: 808px;
+      background:
+        radial-gradient(ellipse 110% 60% at 50% 8%, rgba(37, 65, 224, 0.55) 0%, rgba(37, 65, 224, 0.18) 32%, transparent 60%),
+        linear-gradient(180deg, #050715 0%, #06081a 100%);
+      padding: 0;
+    }
+    .login-screen .grain {
+      position: absolute; inset: 0;
+      pointer-events: none;
+      opacity: 0.08;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.55'/></svg>");
+      mix-blend-mode: overlay;
+    }
+    .login-inner {
+      position: relative;
+      z-index: 2;
+      padding: 380px 28px 38px;
+      display: flex;
+      flex-direction: column;
+      min-height: 808px;
+    }
+    .login-wordmark {
+      font-family: var(--script);
+      font-weight: 600;
+      font-size: 34px;
+      color: var(--cream);
+      line-height: 1;
+      margin-bottom: 18px;
+      letter-spacing: 0;
+      transform: translateX(2px);
+    }
+    .login-headline {
+      font-family: var(--sans);
+      font-weight: 700;
+      font-size: 38px;
+      line-height: 1.08;
+      letter-spacing: -0.025em;
+      color: var(--cream);
+      margin: 0 0 36px;
+    }
+    .login-input {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 18px;
+      border: 1px solid var(--border-2);
+      border-radius: 12px;
+      background: rgba(8, 10, 26, 0.7);
+      color: var(--cream);
+      margin-bottom: 14px;
+    }
+    .login-input svg { color: var(--cream-faded); flex-shrink: 0; }
+    .login-input input {
+      flex: 1;
+      background: none;
+      border: 0;
+      outline: 0;
+      color: var(--cream);
+      font-family: var(--sans);
+      font-size: 16px;
+      letter-spacing: -0.01em;
+    }
+    .login-input input::placeholder { color: var(--cream-faded); }
+
+    .login-cta {
+      width: 100%;
+      padding: 18px;
+      border: 1px solid var(--indigo-bright);
+      border-radius: 12px;
+      background: linear-gradient(180deg, var(--indigo-bright) 0%, var(--indigo) 100%);
+      color: var(--cream);
+      font-family: var(--sans);
+      font-weight: 600;
+      font-size: 16px;
+      letter-spacing: -0.005em;
+      cursor: pointer;
+      box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.16) inset,
+        0 10px 30px rgba(40, 60, 200, 0.35);
+    }
+    .login-cta:hover { background: var(--indigo-bright); }
+
+    .login-divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 34px 0 22px;
+      font-family: var(--sans);
+      font-size: 13px;
+      color: var(--cream-faded);
+    }
+    .login-divider::before,
+    .login-divider::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border-2), transparent);
+    }
+
+    .oauth-row {
+      display: flex;
+      justify-content: center;
+      gap: 22px;
+    }
+    .oauth-btn {
+      width: 56px; height: 56px;
+      border-radius: 50%;
+      border: 1px solid var(--border-2);
+      background: rgba(10, 13, 30, 0.85);
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+    }
+    .oauth-btn:hover { background: var(--surface-2); }
+    .oauth-btn svg { width: 24px; height: 24px; }
+
+    .login-footnote {
+      margin-top: auto;
+      padding-top: 30px;
+      text-align: center;
+      font-family: var(--sans);
+      font-size: 11px;
+      color: var(--cream-faded);
+      letter-spacing: 0;
+    }
+
+    /* ======================== HOME SCREEN ======================== */
+    .home-screen { background: var(--surface); position: relative; }
+    .home-screen::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0; height: 240px;
+      background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(37, 65, 224, 0.22) 0%, transparent 65%);
+      pointer-events: none;
+    }
+
+    .navbar {
+      position: relative;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 18px 14px;
+      border-bottom: 1px solid var(--border);
+      z-index: 2;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0;
+    }
+    .brand-script {
+      font-family: var(--script);
+      font-weight: 600;
+      font-size: 26px;
+      color: var(--cream);
+      line-height: 1;
+      letter-spacing: 0;
+    }
+    .nav-actions { display: flex; gap: 8px; }
+    .icon-btn {
+      width: 34px; height: 34px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface-2);
+      color: var(--cream-dim);
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    .icon-btn:hover { color: var(--cream); border-color: var(--border-2); }
+
+    .summary-strip {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr 1fr 1fr;
+      background: linear-gradient(180deg, rgba(20, 25, 60, 0.5) 0%, var(--surface-2) 100%);
+      border-bottom: 1px solid var(--border);
+      position: relative;
+      z-index: 2;
+    }
+    .summary-item {
+      padding: 14px 10px;
+      text-align: center;
+      border-right: 1px solid var(--border);
+    }
+    .summary-item:last-child { border-right: 0; }
+    .summary-item .lbl {
+      font-family: var(--sans);
+      font-size: 10px;
+      color: var(--cream-faded);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 500;
+    }
+    .summary-item .val {
+      margin-top: 4px;
+      font-family: var(--sans);
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--cream);
+      letter-spacing: -0.01em;
+    }
+    .summary-item.primary .val {
+      font-size: 22px;
+      color: var(--warn);
+    }
+    .summary-item .live { color: var(--info); }
+    .summary-item .unit {
+      font-size: 10px;
+      color: var(--cream-faded);
+      font-weight: 500;
+      margin-left: 2px;
+    }
+
+    .section-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 18px 8px;
+      color: var(--cream-faded);
+      font-family: var(--sans);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      font-weight: 500;
+    }
+
+    .work-rail {
+      border-bottom: 1px solid var(--border);
+      background: rgba(75, 90, 200, 0.04);
+      padding-bottom: 14px;
+    }
+
+    .active-task-scroll {
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: 80%;
+      gap: 10px;
+      overflow-x: auto;
+      padding: 0 18px;
+      scrollbar-width: none;
+    }
+    .active-task-scroll::-webkit-scrollbar { display: none; }
+
+    .active-card {
+      min-height: 124px;
+      border: 1px solid var(--border-2);
+      border-radius: 14px;
+      background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+      padding: 13px 14px;
+      display: grid;
+      gap: 10px;
+      cursor: pointer;
+      text-align: left;
+      transition: border-color 0.18s, transform 0.15s;
+    }
+    .active-card:hover { border-color: var(--border-2); transform: translateY(-1px); }
+    .active-card.selected {
+      border-color: var(--indigo-bright);
+      box-shadow: 0 0 0 1px rgba(91, 108, 218, 0.35), 0 8px 24px rgba(40, 60, 200, 0.18);
+    }
+
+    .active-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .task-title {
+      font-family: var(--sans);
+      font-weight: 600;
+      font-size: 14px;
+      line-height: 1.25;
+      color: var(--cream);
+      letter-spacing: -0.01em;
+    }
+    .live-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--info);
+      box-shadow: 0 0 0 4px rgba(96, 136, 247, 0.18);
+      animation: pulse 1.6s infinite ease-in-out;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.45; }
+    }
+
+    .progress {
+      height: 3px;
+      background: var(--surface-3);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .progress span {
+      display: block;
+      height: 100%;
+      background: linear-gradient(90deg, var(--info), var(--indigo-bright));
+    }
+    .progress.plan span { background: var(--purple); }
+
+    .meta {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      flex-wrap: wrap;
+      color: var(--cream-faded);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+    .meta .agent-claude {
+      color: var(--claude);
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .meta .agent-codex {
+      color: var(--codex);
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .agent-trust {
+      font-family: var(--mono);
+      font-size: 10px;
+      opacity: 0.7;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      min-height: 20px;
+      border: 1px solid var(--border-2);
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--cream-dim);
+      letter-spacing: 0.02em;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .type {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: var(--sans);
+      font-size: 9.5px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      border: 1px solid;
+      color: var(--cream-dim);
+    }
+    .type.pr     { color: var(--accent); border-color: rgba(88, 204, 148, 0.42); }
+    .type.issue  { color: var(--jira);   border-color: rgba(96, 136, 247, 0.42); }
+    .type.plan   { color: var(--purple); border-color: rgba(192, 132, 252, 0.42); }
+    .type.run    { color: var(--info);   border-color: rgba(96, 136, 247, 0.42); }
+
+    .risk {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 9.5px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      border: 1px solid;
+    }
+    .risk.high { color: var(--danger); border-color: rgba(244, 114, 114, 0.45); background: rgba(244, 114, 114, 0.08); }
+    .risk.med  { color: var(--warn);   border-color: rgba(245, 176, 66, 0.45);  background: rgba(245, 176, 66, 0.08); }
+    .risk.low  { color: var(--info);   border-color: rgba(96, 136, 247, 0.45); }
+
+    .filterbar {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+    .filter {
+      min-height: 34px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: transparent;
+      color: var(--cream-faded);
+      font-family: var(--sans);
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: -0.005em;
+      cursor: pointer;
+    }
+    .filter.active {
+      background: var(--surface-2);
+      color: var(--cream);
+      border-color: var(--border-2);
+    }
+    .filter .count {
+      font-family: var(--mono);
+      font-size: 10px;
+      margin-left: 4px;
+      opacity: 0.7;
+    }
+
+    .list { min-height: 380px; padding-bottom: 100px; }
+
+    .row {
+      position: relative;
+      display: grid;
+      grid-template-columns: 4px minmax(0, 1fr) 28px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .row:hover { background: var(--surface-2); }
+    .row.hidden { display: none; }
+
+    .stripe { background: var(--cream-faint); }
+    .row[data-priority="high"] .stripe { background: var(--danger); }
+    .row[data-priority="med"]  .stripe { background: var(--warn); }
+    .row[data-priority="low"]  .stripe { background: var(--info); }
+
+    .row-body { padding: 13px 12px 13px 14px; min-width: 0; }
+    .row-top {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+      flex-wrap: wrap;
+    }
+    .ref {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--cream-faded);
+    }
+    .title {
+      font-family: var(--sans);
+      font-size: 14.5px;
+      font-weight: 600;
+      line-height: 1.3;
+      color: var(--cream);
+      letter-spacing: -0.01em;
+      margin-bottom: 7px;
+    }
+
+    /* Recommendation chip — surfaces the wedge from home */
+    .rec {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 9px;
+      border-radius: 6px;
+      font-family: var(--sans);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: -0.005em;
+      margin-bottom: 7px;
+      background: rgba(88, 204, 148, 0.08);
+      border: 1px solid rgba(88, 204, 148, 0.32);
+      color: var(--accent);
+    }
+    .rec.med {
+      background: rgba(245, 176, 66, 0.08);
+      border-color: rgba(245, 176, 66, 0.32);
+      color: var(--warn);
+    }
+    .rec.low {
+      background: rgba(244, 114, 114, 0.08);
+      border-color: rgba(244, 114, 114, 0.32);
+      color: var(--danger);
+    }
+    .rec .verb { font-weight: 600; }
+    .rec .target {
+      font-family: var(--mono);
+      font-size: 10.5px;
+      color: var(--cream-dim);
+      margin-left: 2px;
+    }
+    .rec .arrow { opacity: 0.6; }
+
+    /* Critic disagreement marker for plan rows */
+    .critic-pair {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+    .critic-pair .planner { color: var(--codex); }
+    .critic-pair .arrow   { color: var(--cream-faded); }
+    .critic-pair .critic  { color: var(--claude); }
+
+    /* Suggestion hint — Loupe's inferred recommendation on tickets */
+    .suggest {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-family: var(--sans);
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--indigo-bright);
+      background: var(--indigo-soft);
+      border: 1px solid rgba(91, 108, 218, 0.3);
+    }
+    .suggest .spark {
+      width: 10px; height: 10px;
+      color: var(--indigo-bright);
+    }
+
+    .row .meta {
+      gap: 9px;
+    }
+
+    .chev {
+      display: grid;
+      place-items: center;
+      color: var(--cream-faded);
+      font-size: 22px;
+    }
+
+    /* Quick dock — context-sensitive */
+    .quick-dock {
+      position: absolute;
+      left: 14px;
+      right: 14px;
+      bottom: 72px;
+      border: 1px solid var(--border-2);
+      background: rgba(14, 17, 36, 0.92);
+      backdrop-filter: blur(18px) saturate(140%);
+      -webkit-backdrop-filter: blur(18px) saturate(140%);
+      border-radius: 18px;
+      padding: 12px 14px 14px;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+      z-index: 3;
+    }
+    .quick-dock-title {
+      margin: 0 0 8px;
+      color: var(--cream-faded);
+      font-family: var(--mono);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .quick-dock-title strong {
+      color: var(--cream);
+      font-weight: 600;
+    }
+    .quick-actions {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+    }
+    .quick-actions button {
+      min-height: 38px;
+      border: 1px solid var(--border-2);
+      border-radius: 10px;
+      background: var(--surface-2);
+      color: var(--cream);
+      font-family: var(--sans);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: -0.005em;
+      cursor: pointer;
+    }
+    .quick-actions button:hover { background: var(--surface-3); }
+    .quick-actions button.primary {
+      background: linear-gradient(180deg, var(--indigo-bright) 0%, var(--indigo) 100%);
+      border-color: var(--indigo-bright);
+      color: var(--cream);
+      box-shadow: 0 1px 0 rgba(255,255,255,0.12) inset;
+    }
+
+    .tabbar {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border-top: 1px solid var(--border);
+      background: rgba(14, 17, 36, 0.98);
+      position: relative;
+      z-index: 2;
+    }
+    .tabbar button {
+      min-height: 56px;
+      border: 0;
+      background: transparent;
+      color: var(--cream-faded);
+      font-family: var(--sans);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: -0.005em;
+      cursor: pointer;
+    }
+    .tabbar button.active { color: var(--cream); }
+
+    /* ======================== EXPLAINER (right column) ======================== */
+    .explainer {
+      display: grid;
+      gap: 16px;
+    }
+    .panel {
+      border: 1px solid var(--border);
+      background: rgba(14, 17, 36, 0.65);
+      border-radius: 14px;
+      padding: 20px 22px;
+    }
+    .panel h2 {
+      margin: 0 0 10px;
+      font-family: var(--sans);
+      font-size: 19px;
+      font-weight: 600;
+      letter-spacing: -0.015em;
+      color: var(--cream);
+    }
+    .panel p {
+      margin: 0;
+      color: var(--cream-dim);
+      font-size: 14.5px;
+    }
+
+    .screen-toggle {
+      display: flex; gap: 8px;
+      margin-top: 16px;
+    }
+    .screen-toggle button {
+      min-height: 36px; padding: 0 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      color: var(--cream-dim);
+      font-family: var(--sans);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      letter-spacing: -0.005em;
+    }
+    .screen-toggle button.active {
+      background: var(--indigo-soft);
+      border-color: var(--indigo);
+      color: var(--cream);
+    }
+
+    .principles {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .principle {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      background: var(--surface);
+    }
+    .principle strong {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--cream);
+      font-weight: 600;
+    }
+    .principle span {
+      display: block;
+      color: var(--cream-dim);
+      font-size: 13px;
+    }
+
+    .variant-controls {
+      display: flex; flex-wrap: wrap; gap: 8px;
+      margin-top: 14px;
+    }
+    .variant-controls button {
+      min-height: 34px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: var(--surface);
+      color: var(--cream-dim);
+      padding: 0 12px;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: var(--sans);
+    }
+    .variant-controls button.active {
+      color: var(--cream);
+      border-color: var(--indigo);
+      background: var(--indigo-soft);
+    }
+    .state-card {
+      display: none;
+      border-top: 1px solid var(--border);
+      margin-top: 14px;
+      padding-top: 14px;
+    }
+    .state-card.active { display: block; }
+    .state-card strong { color: var(--cream); font-weight: 600; }
+    .state-card ul {
+      margin: 8px 0 0;
+      padding-left: 18px;
+      color: var(--cream-dim);
+    }
+
+    /* SVG icon helpers */
+    .sicon { width: 11px; height: 11px; vertical-align: -1px; display: inline-block; }
+
+    @media (max-width: 980px) {
+      .top-copy, .stage, .principles {
+        grid-template-columns: 1fr;
+      }
+      .phone { position: static; }
+    }
+    @media (max-width: 520px) {
+      .page { padding: 20px 12px 44px; }
+      .phone { border-radius: 0; width: 100%; }
+      .summary-strip { grid-template-columns: repeat(2, 1fr); }
+      .filterbar { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Reusable agent icon glyphs -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="claude-mark" viewBox="0 0 16 16">
+        <path d="M8 0 L9.4 6.6 L16 8 L9.4 9.4 L8 16 L6.6 9.4 L0 8 L6.6 6.6 Z" fill="currentColor"/>
+      </symbol>
+      <symbol id="codex-mark" viewBox="0 0 16 16">
+        <g fill="none" stroke="currentColor" stroke-width="1.4">
+          <circle cx="8"    cy="4.2"  r="1.9"/>
+          <circle cx="3.5"  cy="6.8"  r="1.9"/>
+          <circle cx="3.5"  cy="11.2" r="1.9"/>
+          <circle cx="8"    cy="13.8" r="1.9"/>
+          <circle cx="12.5" cy="11.2" r="1.9"/>
+          <circle cx="12.5" cy="6.8"  r="1.9"/>
+        </g>
+      </symbol>
+      <symbol id="spark" viewBox="0 0 16 16">
+        <path d="M8 1 L9 6 L14 7 L9 8 L8 13 L7 8 L2 7 L7 6 Z" fill="currentColor"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <div class="page">
+    <div class="top-copy">
+      <div>
+        <div class="eyebrow">Loupe prototype · v0.2</div>
+        <h1>One glass for agent&nbsp;work.</h1>
+      </div>
+      <div class="notes">
+        <strong>Prototype thesis</strong>
+        <ul>
+          <li>Login first, then the homescreen — the demo is a pair.</li>
+          <li>Issues, plans, and PRs share one attention inbox.</li>
+          <li>The homescreen surfaces the wedge: agent recommendations, trust, and critic-pairing — not just a list.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="phone" aria-label="Loupe prototype">
+
+        <!-- LOGIN SCREEN -->
+        <div class="screen-state active" data-screen="login">
+          <div class="login-screen">
+            <div class="grain"></div>
+            <div class="statusbar" style="color: var(--cream);">
+              <span>9:41</span>
+              <span class="glyphs">
+                <svg width="17" height="11" viewBox="0 0 17 11" fill="currentColor"><rect x="0" y="6" width="3" height="5" rx="0.5"/><rect x="4" y="4" width="3" height="7" rx="0.5"/><rect x="8" y="2" width="3" height="9" rx="0.5"/><rect x="12" y="0" width="3" height="11" rx="0.5"/></svg>
+                <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor"><path d="M7.5 2c2.2 0 4.2.8 5.8 2.2l-1.4 1.4C10.6 4.5 9.1 4 7.5 4S4.4 4.5 3.1 5.6L1.7 4.2C3.3 2.8 5.3 2 7.5 2zm0 3c1.4 0 2.6.5 3.6 1.4L9.7 7.8c-.6-.5-1.4-.8-2.2-.8s-1.6.3-2.2.8L3.9 6.4C4.9 5.5 6.1 5 7.5 5zm0 3c.6 0 1.2.2 1.6.6L7.5 10 5.9 8.6c.4-.4 1-.6 1.6-.6z"/></svg>
+                <svg width="24" height="11" viewBox="0 0 24 11" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="20" height="10" rx="2.5"/><rect x="2" y="2" width="17" height="7" rx="1" fill="currentColor"/><rect x="21.5" y="3.5" width="1.5" height="4" rx="0.5" fill="currentColor"/></svg>
+              </span>
+            </div>
+
+            <div class="login-inner">
+              <div class="login-wordmark">Loupe.</div>
+              <h2 class="login-headline">All your agents,<br>in one place.</h2>
+
+              <div class="login-input">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="5" width="18" height="14" rx="2"/>
+                  <path d="m3 7 9 6 9-6"/>
+                </svg>
+                <input type="email" placeholder="Enter your email">
+              </div>
+
+              <button class="login-cta">Get Started</button>
+
+              <div class="login-divider">Login using</div>
+
+              <div class="oauth-row">
+                <button class="oauth-btn" aria-label="Continue with Google">
+                  <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                    <path fill="#FBBC05" d="M5.84 14.09A6.6 6.6 0 0 1 5.45 12c0-.73.13-1.43.39-2.09V7.07H2.18A11 11 0 0 0 1 12c0 1.77.43 3.45 1.18 4.93l3.66-2.84z"/>
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                  </svg>
+                </button>
+                <button class="oauth-btn" aria-label="Continue with GitHub">
+                  <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path fill="#f3ead0" d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-2c-3.2.69-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.19 1.18a11 11 0 0 1 5.81 0c2.22-1.5 3.19-1.18 3.19-1.18.63 1.58.23 2.75.12 3.04.74.81 1.18 1.84 1.18 3.1 0 4.42-2.69 5.39-5.26 5.68.41.35.78 1.05.78 2.12v3.14c0 .31.21.66.79.55C20.21 21.39 23.5 17.07 23.5 12 23.5 5.65 18.35.5 12 .5z"/>
+                  </svg>
+                </button>
+              </div>
+
+              <div class="login-footnote">
+                BYO API keys · runs locally on your Mac · no cloud, no telemetry
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- HOME SCREEN -->
+        <div class="screen-state" data-screen="home">
+          <div class="home-screen">
+            <div class="statusbar"><span>9:41</span><span class="glyphs">5G · 82%</span></div>
+
+            <div class="navbar">
+              <div class="brand">
+                <span class="brand-script">Loupe</span>
+              </div>
+              <div class="nav-actions">
+                <button class="icon-btn" aria-label="Search">⌕</button>
+                <button class="icon-btn" aria-label="Dispatch">+</button>
+              </div>
+            </div>
+
+            <div class="summary-strip">
+              <div class="summary-item primary">
+                <div class="lbl">Needs you</div>
+                <div class="val">5</div>
+              </div>
+              <div class="summary-item">
+                <div class="lbl">Running</div>
+                <div class="val live">3</div>
+              </div>
+              <div class="summary-item">
+                <div class="lbl">Ready</div>
+                <div class="val">4</div>
+              </div>
+              <div class="summary-item">
+                <div class="lbl">Spend</div>
+                <div class="val">$47<span class="unit">/mo</span></div>
+              </div>
+            </div>
+
+            <div class="work-rail">
+              <div class="section-title"><span>Active</span><span>running + dispatched</span></div>
+              <div class="active-task-scroll">
+                <button class="active-card selected" data-active="Rate-limit signup endpoint" data-kind="run">
+                  <div class="active-head">
+                    <span class="chip"><span class="live-dot"></span>RUNNING</span>
+                    <span class="chip">64%</span>
+                  </div>
+                  <div class="task-title">Rate-limit signup endpoint</div>
+                  <div class="progress"><span style="width:64%"></span></div>
+                  <div class="meta">
+                    <span class="agent-claude"><svg class="sicon"><use href="#claude-mark"/></svg>Claude</span>
+                    <span class="agent-codex"><svg class="sicon"><use href="#codex-mark"/></svg>Codex</span>
+                    <span>$0.61 · 6m</span>
+                  </div>
+                </button>
+                <button class="active-card" data-active="Add retry to ingest pipeline" data-kind="run">
+                  <div class="active-head">
+                    <span class="chip"><span class="live-dot"></span>RUNNING</span>
+                    <span class="chip">22%</span>
+                  </div>
+                  <div class="task-title">Add retry to ingest pipeline</div>
+                  <div class="progress"><span style="width:22%"></span></div>
+                  <div class="meta">
+                    <span class="agent-codex"><svg class="sicon"><use href="#codex-mark"/></svg>Codex <span class="agent-trust">92%</span></span>
+                    <span>DATA-71</span>
+                    <span>$0.07</span>
+                  </div>
+                </button>
+                <button class="active-card" data-active="Plan ready for search ranking v2" data-kind="plan">
+                  <div class="active-head">
+                    <span class="chip" style="color: var(--purple); border-color: rgba(192,132,252,0.4);">PLAN READY</span>
+                    <span class="chip">3m read</span>
+                  </div>
+                  <div class="task-title">Implement search ranking v2</div>
+                  <div class="progress plan"><span style="width:100%"></span></div>
+                  <div class="meta">
+                    <span class="critic-pair">
+                      <span class="planner"><svg class="sicon"><use href="#codex-mark"/></svg></span>
+                      <span class="arrow">→</span>
+                      <span class="critic"><svg class="sicon"><use href="#claude-mark"/></svg></span>
+                    </span>
+                    <span>1 note unresolved</span>
+                    <span>SEARCH-44</span>
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            <div class="filterbar">
+              <button class="filter active" data-filter="all">All <span class="count">12</span></button>
+              <button class="filter" data-filter="issue">Issues <span class="count">5</span></button>
+              <button class="filter" data-filter="pr">PRs <span class="count">4</span></button>
+              <button class="filter" data-filter="plan">Plans <span class="count">1</span></button>
+            </div>
+
+            <div class="list" id="list">
+              <div class="section-title"><span>Attention inbox</span><span>by priority</span></div>
+
+              <div class="row" data-kind="pr" data-priority="high" data-title="Fix race in Stripe webhook handler" data-actions="pr-review">
+                <div class="stripe"></div>
+                <div class="row-body">
+                  <div class="row-top">
+                    <span class="type pr">PR</span>
+                    <span class="ref">PAY-1284</span>
+                    <span class="risk high">HIGH</span>
+                  </div>
+                  <div class="title">Fix race in Stripe webhook handler</div>
+                  <div class="rec med">
+                    <span class="verb">ACCEPT</span>
+                    <span style="opacity:0.6">·</span>
+                    <span>MED confidence</span>
+                    <span class="arrow">›</span>
+                    <span class="target">route.ts:42–68</span>
+                  </div>
+                  <div class="meta">
+                    <span class="agent-claude"><svg class="sicon"><use href="#claude-mark"/></svg>Claude <span class="agent-trust">87%</span></span>
+                    <span>$0.42 · 9m</span>
+                  </div>
+                </div>
+                <div class="chev">›</div>
+              </div>
+
+              <div class="row" data-kind="issue" data-priority="med" data-title="Add health endpoint to billing service" data-actions="issue">
+                <div class="stripe"></div>
+                <div class="row-body">
+                  <div class="row-top">
+                    <span class="type issue">ISSUE</span>
+                    <span class="ref">BILL-308</span>
+                    <span class="risk med">P2</span>
+                  </div>
+                  <div class="title">Add /healthz endpoint to billing service</div>
+                  <div class="row-top" style="margin-bottom:0;">
+                    <span class="suggest">
+                      <svg class="sicon spark"><use href="#spark"/></svg>
+                      Suggested: dispatch now
+                    </span>
+                    <span class="chip">est. $0.12–$0.35</span>
+                  </div>
+                </div>
+                <div class="chev">›</div>
+              </div>
+
+              <div class="row" data-kind="plan" data-priority="low" data-title="Plan ready for search ranking v2" data-actions="plan">
+                <div class="stripe"></div>
+                <div class="row-body">
+                  <div class="row-top">
+                    <span class="type plan">PLAN</span>
+                    <span class="ref">SEARCH-44</span>
+                    <span class="critic-pair" title="Codex planned, Claude critiqued">
+                      <span class="planner"><svg class="sicon"><use href="#codex-mark"/></svg></span>
+                      <span class="arrow">→</span>
+                      <span class="critic"><svg class="sicon"><use href="#claude-mark"/></svg></span>
+                    </span>
+                  </div>
+                  <div class="title">Plan ready: implement search ranking v2</div>
+                  <div class="rec">
+                    <span class="verb">CRITIC FOUND 2 ISSUES</span>
+                    <span style="opacity:0.6">·</span>
+                    <span>1 unresolved</span>
+                    <span class="arrow">›</span>
+                    <span class="target">re-rank training bias</span>
+                  </div>
+                  <div class="meta">
+                    <span>3m read · 0 code written yet</span>
+                  </div>
+                </div>
+                <div class="chev">›</div>
+              </div>
+
+              <div class="row" data-kind="pr" data-priority="med" data-title="Migrate user email index" data-actions="pr-review">
+                <div class="stripe"></div>
+                <div class="row-body">
+                  <div class="row-top">
+                    <span class="type pr">PR</span>
+                    <span class="ref">DB-117</span>
+                    <span class="risk med">MED</span>
+                  </div>
+                  <div class="title">Migrate user.email index to btree</div>
+                  <div class="rec">
+                    <span class="verb">ACCEPT</span>
+                    <span style="opacity:0.6">·</span>
+                    <span>HIGH confidence</span>
+                  </div>
+                  <div class="meta">
+                    <span class="agent-claude"><svg class="sicon"><use href="#claude-mark"/></svg>Claude <span class="agent-trust">87%</span></span>
+                    <span>tests passed</span>
+                    <span>$1.10 · 22m</span>
+                  </div>
+                </div>
+                <div class="chev">›</div>
+              </div>
+
+              <div class="row" data-kind="issue" data-priority="low" data-title="Update Terraform provider" data-actions="issue">
+                <div class="stripe"></div>
+                <div class="row-body">
+                  <div class="row-top">
+                    <span class="type issue">ISSUE</span>
+                    <span class="ref">INFRA-1011</span>
+                    <span class="risk low">P3</span>
+                  </div>
+                  <div class="title">Update Terraform provider to 1.8</div>
+                  <div class="row-top" style="margin-bottom:0;">
+                    <span class="suggest">
+                      <svg class="sicon spark"><use href="#spark"/></svg>
+                      Suggested: plan first
+                    </span>
+                    <span class="chip">routine</span>
+                  </div>
+                </div>
+                <div class="chev">›</div>
+              </div>
+
+              <div class="row" data-kind="pr" data-priority="low" data-title="Bump dependencies" data-actions="pr-review">
+                <div class="stripe"></div>
+                <div class="row-body">
+                  <div class="row-top">
+                    <span class="type pr">PR</span>
+                    <span class="ref">INFRA-902</span>
+                    <span class="risk low">LOW</span>
+                  </div>
+                  <div class="title">Bump 12 deps; one PR per group</div>
+                  <div class="rec">
+                    <span class="verb">ACCEPT</span>
+                    <span style="opacity:0.6">·</span>
+                    <span>HIGH confidence</span>
+                  </div>
+                  <div class="meta">
+                    <span class="agent-codex"><svg class="sicon"><use href="#codex-mark"/></svg>Codex <span class="agent-trust">92%</span></span>
+                    <span>docs + lockfiles</span>
+                    <span>$0.18</span>
+                  </div>
+                </div>
+                <div class="chev">›</div>
+              </div>
+            </div>
+
+            <div class="quick-dock">
+              <p class="quick-dock-title" id="dockTitle">Selected: <strong>Rate-limit signup endpoint</strong></p>
+              <div class="quick-actions" id="dockActions">
+                <button class="primary">Open</button>
+                <button>Steer</button>
+                <button>Stop</button>
+                <button>Later</button>
+              </div>
+            </div>
+
+            <div class="tabbar">
+              <button class="active">Home</button>
+              <button>Review</button>
+              <button>Runs</button>
+              <button>You</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="explainer">
+        <div class="panel">
+          <h2>Two screens, one demo</h2>
+          <p>Login earns the moment — premium, calm, BYO-keys honest in the footnote. Home delivers the wedge — agent recommendations and critic-pairing are the first thing your eye lands on, not buried in metadata.</p>
+          <div class="screen-toggle" role="tablist">
+            <button class="active" data-target="login">Login</button>
+            <button data-target="home">Home</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>What the home screen surfaces</h2>
+          <div class="principles">
+            <div class="principle">
+              <strong>Recommendation on every PR</strong>
+              <span>The wedge made visible: agent commits to a verdict + confidence + one thing to read. Tap to open the full review form factor.</span>
+            </div>
+            <div class="principle">
+              <strong>Critic-pair on plans</strong>
+              <span>Planner → critic relationship rendered as the agent dots. Unresolved critique notes show as a count — disagreement is the signal.</span>
+            </div>
+            <div class="principle">
+              <strong>Trust % on agent badges</strong>
+              <span>Per-agent accept-rate from your own history. The data moat that takes a year to build, made visible in 11px.</span>
+            </div>
+            <div class="principle">
+              <strong>Loupe-inferred suggestions</strong>
+              <span>Issues carry a spark-marked hint (“dispatch now” vs “plan first”) drawn from prior outcomes. Not static copy — product intelligence.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Why this aesthetic</h2>
+          <p>Cream-on-deep-navy with the indigo glow signals refinement, not operations. Loupe is for engineers stepping into a director's role — the surface should feel like a calm command center, not a Splunk dashboard. The Caveat wordmark and Familjen Grotesk pairing pulls warmth out of the indigo to keep the product approachable.</p>
+        </div>
+
+        <div class="panel">
+          <h2>Interaction variants to test</h2>
+          <p>The phone mock stays stable; the rationale below changes so the design stays critique-friendly.</p>
+          <div class="variant-controls">
+            <button class="variant active" data-state="split">Split rail + inbox</button>
+            <button class="variant" data-state="pure">Pure single stream</button>
+            <button class="variant" data-state="queue">Queue-first</button>
+          </div>
+          <div class="state-card active" id="split">
+            <strong>Split rail + inbox</strong>
+            <ul>
+              <li>Best balance: one homescreen, two mental buckets.</li>
+              <li>Running tasks stay visible without polluting the decision queue.</li>
+              <li>Recommended default for v1.</li>
+            </ul>
+          </div>
+          <div class="state-card" id="pure">
+            <strong>Pure single stream</strong>
+            <ul>
+              <li>Cleaner conceptually, but live tasks and decisions fight for rank.</li>
+              <li>Works only if “currently running” is never more than one or two items.</li>
+              <li>More Linear-like, less operations-like.</li>
+            </ul>
+          </div>
+          <div class="state-card" id="queue">
+            <strong>Queue-first</strong>
+            <ul>
+              <li>Great for power users running many agents.</li>
+              <li>Risks making Loupe feel like a job runner instead of a decision surface.</li>
+              <li>Better as a second tab called Runs.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Open design questions</h2>
+          <p>Should plan approvals live in the active rail or the attention inbox? My bias: both. Show the plan card in the active rail while it is fresh, but also rank it in the inbox if it blocks implementation. Should agent trust % default visible or live behind a tap on the agent badge? Probably visible — but it must never exceed two characters.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Filter tabs
+    const filters = document.querySelectorAll(".filter");
+    const rows = document.querySelectorAll(".row");
+    const dockTitle = document.getElementById("dockTitle");
+    const dockActions = document.getElementById("dockActions");
+
+    filters.forEach((button) => {
+      button.addEventListener("click", () => {
+        const filter = button.dataset.filter;
+        filters.forEach((item) => item.classList.toggle("active", item === button));
+        rows.forEach((row) => {
+          row.classList.toggle("hidden", filter !== "all" && row.dataset.kind !== filter);
+        });
+      });
+    });
+
+    // Active card selection
+    document.querySelectorAll(".active-card").forEach((card) => {
+      card.addEventListener("click", () => {
+        document.querySelectorAll(".active-card").forEach((item) => item.classList.toggle("selected", item === card));
+        const kind = card.dataset.kind;
+        setDock(card.dataset.active, kind === "plan" ? "plan" : "run");
+      });
+    });
+
+    // Row selection — context-sensitive dock
+    rows.forEach((row) => {
+      row.addEventListener("click", () => {
+        document.querySelectorAll(".active-card").forEach((item) => item.classList.remove("selected"));
+        setDock(row.dataset.title, row.dataset.actions);
+      });
+    });
+
+    // Context-sensitive Quick Dock actions
+    function setDock(title, actions) {
+      dockTitle.innerHTML = "Selected: <strong>" + title + "</strong>";
+      const sets = {
+        "pr-review": [
+          { label: "Accept", primary: true },
+          { label: "Ask" },
+          { label: "Reject" },
+          { label: "Open" }
+        ],
+        "issue": [
+          { label: "Dispatch", primary: true },
+          { label: "Plan" },
+          { label: "To me" },
+          { label: "Snooze" }
+        ],
+        "plan": [
+          { label: "Approve", primary: true },
+          { label: "Re-plan" },
+          { label: "Open" },
+          { label: "Skip" }
+        ],
+        "run": [
+          { label: "Open", primary: true },
+          { label: "Steer" },
+          { label: "Stop" },
+          { label: "Later" }
+        ]
+      };
+      const set = sets[actions] || sets["run"];
+      dockActions.innerHTML = set
+        .map((a) => `<button class="${a.primary ? "primary" : ""}">${a.label}</button>`)
+        .join("");
+    }
+
+    // Variant explainer
+    const variants = document.querySelectorAll(".variant");
+    const stateCards = document.querySelectorAll(".state-card");
+    variants.forEach((button) => {
+      button.addEventListener("click", () => {
+        variants.forEach((item) => item.classList.toggle("active", item === button));
+        stateCards.forEach((card) => card.classList.toggle("active", card.id === button.dataset.state));
+      });
+    });
+
+    // Screen state toggle (Login / Home)
+    const screenButtons = document.querySelectorAll(".screen-toggle button");
+    const screens = document.querySelectorAll(".screen-state");
+    screenButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const target = btn.dataset.target;
+        screenButtons.forEach((b) => b.classList.toggle("active", b === btn));
+        screens.forEach((s) => s.classList.toggle("active", s.dataset.screen === target));
+      });
+    });
+  </script>
+</body>
+</html>

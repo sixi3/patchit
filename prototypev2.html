@@ -1,0 +1,812 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Loupe TicketView Prototype v2</title>
+  <style>
+    :root {
+      --page: #090b12;
+      --phone: #030712;
+      --panel: #080d1d;
+      --panel-2: #0d1430;
+      --line: #17234b;
+      --line-hot: #273873;
+      --text: #f8fafc;
+      --muted: #85899a;
+      --dim: #555b70;
+      --cream: #fff7bc;
+      --purple: #c113d7;
+      --purple-2: #7c2dff;
+      --blue: #10a5e8;
+      --orange: #ff9e63;
+      --green: #4ade80;
+      --warn: #ffd166;
+      --danger: #ff6b7a;
+
+      /* JIRA-standard icon colors */
+      --jira-story:        #65ba3a;
+      --jira-task:         #4bade8;
+      --jira-bug:          #e54a4a;
+      --jira-epic:         #904ee2;
+      --jira-subtask:      #4bade8;
+      --jira-improvement:  #3da597;
+      --jira-spike:        #9097a3;
+
+      --jira-highest:      #cd1316;
+      --jira-high:         #d04437;
+      --jira-medium:       #ea7d24;
+      --jira-low:          #2684ff;
+      --jira-lowest:       #4598df;
+
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 50% 0%, rgba(113, 24, 173, 0.34), transparent 34%),
+        linear-gradient(180deg, #111421, var(--page));
+      color: var(--text);
+      font-family: var(--sans);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button { font: inherit; }
+
+    .frame {
+      width: 430px;
+      height: 932px;
+      padding: 18px;
+      border-radius: 58px;
+      background: #0b0d13;
+      box-shadow:
+        0 28px 90px rgba(0, 0, 0, 0.62),
+        inset 0 0 0 2px #1b2030,
+        inset 0 0 0 7px #05070d;
+    }
+
+    .phone {
+      position: relative;
+      width: 390px;
+      height: 844px;
+      overflow: hidden;
+      border-radius: 42px;
+      background:
+        radial-gradient(circle at 74% 7%, rgba(114, 41, 178, 0.55), transparent 18%),
+        radial-gradient(circle at 26% 93%, rgba(175, 17, 215, 0.42), transparent 17%),
+        linear-gradient(180deg, #050713 0%, #020611 100%);
+      border: 1px solid #1a2242;
+    }
+
+    .island {
+      position: absolute;
+      top: 12px; left: 50%;
+      transform: translateX(-50%);
+      width: 116px; height: 34px;
+      border-radius: 999px;
+      background: #02040a;
+      z-index: 5;
+    }
+
+    .statusbar {
+      height: 54px;
+      padding: 15px 30px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      font-weight: 760;
+      font-size: 15px;
+    }
+    .system-icons { display: flex; align-items: center; gap: 8px; }
+
+    .signal {
+      display: grid;
+      grid-template-columns: repeat(4, 4px);
+      gap: 3px; align-items: end;
+      height: 18px;
+    }
+    .signal i { width: 4px; border-radius: 999px; background: #fff; }
+    .signal i:nth-child(1) { height: 6px; }
+    .signal i:nth-child(2) { height: 9px; }
+    .signal i:nth-child(3) { height: 13px; }
+    .signal i:nth-child(4) { height: 16px; }
+
+    .wifi {
+      width: 18px; height: 14px;
+      border: 3px solid #fff;
+      border-color: #fff transparent transparent transparent;
+      border-radius: 50%;
+      position: relative;
+    }
+    .wifi::after {
+      content: "";
+      position: absolute;
+      left: 5px; top: 5px;
+      width: 4px; height: 4px;
+      background: #fff;
+      border-radius: 50%;
+    }
+
+    .battery {
+      width: 28px; height: 14px;
+      border: 2px solid #fff;
+      border-radius: 5px;
+      position: relative;
+    }
+    .battery::before {
+      content: "";
+      position: absolute;
+      inset: 2px;
+      border-radius: 2px;
+      background: #fff;
+    }
+    .battery::after {
+      content: "";
+      position: absolute;
+      right: -5px; top: 3px;
+      width: 2px; height: 6px;
+      border-radius: 999px;
+      background: #fff;
+    }
+
+    .app {
+      height: calc(100% - 54px);
+      display: grid;
+      grid-template-rows: 150px 1fr 99px;
+    }
+
+    .top {
+      padding: 30px 24px 20px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .profile { display: flex; align-items: center; gap: 14px; }
+
+    .avatar {
+      width: 46px; height: 46px;
+      border-radius: 7px;
+      background:
+        linear-gradient(90deg, transparent 0 29%, #fff 29% 47%, transparent 47%),
+        linear-gradient(0deg, transparent 0 33%, #fff 33% 54%, transparent 54%),
+        repeating-linear-gradient(90deg, #12a5dc 0 18px, #ebfaff 18px 36px);
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+    }
+
+    .hello { color: var(--muted); font-size: 12px; margin-bottom: 2px; }
+    .name { color: var(--cream); font-size: 22px; line-height: 1; font-weight: 760; }
+
+    .agent-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 76px;
+      height: 45px;
+      border-radius: 999px;
+      padding: 0 12px 0 11px;
+      background: rgba(24, 32, 78, 0.82);
+      border: 1px solid #253887;
+      box-shadow: inset 0 0 18px rgba(77, 94, 205, 0.14);
+    }
+
+    .agent-stack { position: relative; width: 38px; height: 28px; }
+    .agent-face {
+      position: absolute;
+      top: 1px;
+      width: 26px; height: 26px;
+      border-radius: 50%;
+      border: 2px solid #f8efff;
+      display: grid;
+      place-items: center;
+      font-size: 13px;
+      font-weight: 800;
+      color: #fff;
+    }
+    .agent-face:first-child { left: 0; background: var(--orange); z-index: 2; }
+    .agent-face:last-child  { right: 0; background: #7b61ff; }
+    .agent-count { font-size: 14px; font-weight: 820; }
+
+    .content {
+      overflow-y: auto;
+      scrollbar-width: none;
+      padding: 16px 14px 26px;
+    }
+    .content::-webkit-scrollbar { display: none; }
+
+    .subhead {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 3px 10px;
+    }
+    .subhead h1 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1;
+      letter-spacing: 0;
+    }
+    .subhead span {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    /* ========= TICKET CARD ========= */
+    .ticket {
+      min-height: 168px;
+      border: 1px solid #192452;
+      border-radius: 20px;
+      background:
+        linear-gradient(180deg, rgba(17, 27, 65, 0.86), rgba(5, 10, 25, 0.94)),
+        var(--panel);
+      box-shadow: 0 16px 34px rgba(0, 0, 0, 0.28);
+      padding: 14px;
+      margin-bottom: 12px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 10px;
+    }
+    .ticket.hot {
+      border-color: rgba(255, 107, 122, 0.36);
+      background:
+        radial-gradient(circle at 100% 0%, rgba(255, 107, 122, 0.10), transparent 34%),
+        linear-gradient(180deg, rgba(28, 18, 28, 0.9), rgba(5, 10, 25, 0.94));
+    }
+    .ticket.epic-card {
+      border-color: rgba(193, 19, 215, 0.30);
+      background:
+        radial-gradient(circle at 0% 0%, rgba(193, 19, 215, 0.12), transparent 38%),
+        linear-gradient(180deg, rgba(24, 16, 38, 0.92), rgba(5, 10, 25, 0.94));
+    }
+
+    .ticket-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .ticket-meta {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+
+    /* JIRA-style inline icons (issue type + priority) */
+    .jira-icon {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+      display: inline-block;
+      vertical-align: -2px;
+    }
+
+    .ref {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: #c9cde0;
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+
+    .chip {
+      min-height: 21px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      padding: 3px 7px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .chip.status-progress {
+      color: #ffd99c;
+      border-color: rgba(255, 209, 102, 0.40);
+      background: rgba(255, 209, 102, 0.06);
+    }
+
+    .age {
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .epic-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: #b78bd6;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      letter-spacing: 0.02em;
+      margin-bottom: 6px;
+    }
+    .epic-link::before { content: "↑"; color: rgba(193, 19, 215, 0.7); }
+    .epic-link .epic-ref { color: #d29bff; font-weight: 700; }
+
+    .ticket-title {
+      margin: 0 0 8px;
+      color: #fff;
+      font-size: 16px;
+      line-height: 1.22;
+      letter-spacing: 0;
+      font-weight: 720;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .ticket-desc {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12.5px;
+      line-height: 1.45;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .ticket-desc code,
+    .ticket-desc .mono {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      background: rgba(255, 255, 255, 0.06);
+      padding: 1px 5px;
+      border-radius: 3px;
+      color: #d6d9e8;
+    }
+
+    .subtask-count {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      margin-top: 9px;
+    }
+    .subtask-count .done { color: var(--green); font-weight: 700; }
+    .subtask-count .of   { color: var(--dim); }
+
+    .epic-progress {
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .epic-progress .bar {
+      height: 4px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .epic-progress .bar span {
+      display: block;
+      height: 100%;
+      background: linear-gradient(90deg, var(--purple), var(--purple-2));
+      border-radius: 999px;
+    }
+    .epic-progress .counts {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .epic-progress .counts .done { color: #d29bff; font-weight: 700; }
+    .epic-progress .counts .of   { color: var(--dim); }
+
+    .action-row {
+      display: grid;
+      grid-template-columns: 1.25fr 1fr 38px;
+      gap: 7px;
+    }
+    .action {
+      height: 36px;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      border-radius: 11px;
+      background: rgba(255, 255, 255, 0.045);
+      color: #d8ddef;
+      font-weight: 660;
+      font-size: 12px;
+      letter-spacing: -0.005em;
+      cursor: pointer;
+    }
+    .action:hover { background: rgba(255, 255, 255, 0.08); }
+    .action.primary {
+      color: #fff;
+      background: linear-gradient(135deg, rgba(193, 19, 215, 0.92), rgba(94, 62, 255, 0.88));
+      border-color: rgba(223, 113, 255, 0.5);
+      box-shadow: 0 8px 20px rgba(149, 22, 218, 0.28);
+    }
+    .action.icon {
+      display: grid;
+      place-items: center;
+      font-size: 16px;
+      letter-spacing: 0;
+      padding: 0;
+    }
+
+    .bottom-nav {
+      border-top: 1px solid var(--line);
+      background:
+        radial-gradient(circle at 27% 0%, rgba(193, 19, 215, 0.42), transparent 25%),
+        rgba(5, 7, 19, 0.96);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      align-items: center;
+    }
+    .nav-item {
+      height: 99px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      display: grid;
+      place-items: center;
+      gap: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: 520;
+    }
+    .nav-item.active { color: #f6f7ff; }
+
+    .nav-icon { width: 33px; height: 23px; position: relative; }
+    .nav-icon.ticket::before,
+    .nav-icon.ticket::after {
+      content: ""; position: absolute; inset: 0;
+      border: 2px solid var(--purple); border-radius: 5px;
+    }
+    .nav-icon.ticket::after {
+      inset: 7px -2px;
+      border-left: 0; border-right: 0; border-radius: 0;
+    }
+    .nav-icon.pr::before {
+      content: ""; position: absolute;
+      top: 10px; left: 4px; right: 4px;
+      height: 3px; background: var(--muted);
+      border-radius: 999px;
+    }
+    .nav-icon.pr::after {
+      content: ""; position: absolute;
+      top: 4px; left: 50%; transform: translateX(-50%);
+      width: 16px; height: 16px;
+      border: 3px solid var(--muted);
+      border-radius: 50%;
+      background: var(--phone);
+    }
+
+    @media (max-width: 500px) {
+      body { display: block; background: var(--phone); }
+      .frame {
+        width: 100vw; height: 100vh;
+        padding: 0; border-radius: 0;
+        box-shadow: none;
+      }
+      .phone {
+        width: 100vw; height: 100vh;
+        border-radius: 0; border: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- JIRA-style icon set (issue types + priorities) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <!-- STORY: green bookmark/page -->
+      <symbol id="ic-story" viewBox="0 0 14 14">
+        <rect x="1.5" y="1.5" width="11" height="11" rx="1.6" fill="#65ba3a"/>
+        <path d="M5 4 H9 V8 L7 6.7 L5 8 Z" fill="#fff"/>
+      </symbol>
+
+      <!-- TASK: blue checkmark square -->
+      <symbol id="ic-task" viewBox="0 0 14 14">
+        <rect x="1.5" y="1.5" width="11" height="11" rx="1.6" fill="#4bade8"/>
+        <path d="M4 7.2 L6.2 9.4 L10 5.4" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+
+      <!-- BUG: red bug -->
+      <symbol id="ic-bug" viewBox="0 0 14 14">
+        <circle cx="7" cy="7" r="5.5" fill="#e54a4a"/>
+        <rect x="6.4" y="2.5" width="1.2" height="9" rx="0.4" fill="#fff"/>
+        <path d="M3.4 5 H10.6 M3.4 9 H10.6" stroke="#fff" stroke-width="1" stroke-linecap="round"/>
+      </symbol>
+
+      <!-- EPIC: purple lightning -->
+      <symbol id="ic-epic" viewBox="0 0 14 14">
+        <rect x="1.5" y="1.5" width="11" height="11" rx="1.6" fill="#904ee2"/>
+        <path d="M8.2 2.6 L4.4 7.6 H6.6 L5.8 11.4 L9.6 6.4 H7.4 Z" fill="#fff"/>
+      </symbol>
+
+      <!-- SUB-TASK: light blue linked square -->
+      <symbol id="ic-subtask" viewBox="0 0 14 14">
+        <rect x="1.5" y="1.5" width="11" height="11" rx="1.6" fill="#4bade8"/>
+        <rect x="4" y="4" width="3.5" height="3.5" rx="0.4" fill="#fff"/>
+        <rect x="6.5" y="6.5" width="3.5" height="3.5" rx="0.4" fill="#fff"/>
+      </symbol>
+
+      <!-- IMPROVEMENT: teal up arrow -->
+      <symbol id="ic-improvement" viewBox="0 0 14 14">
+        <rect x="1.5" y="1.5" width="11" height="11" rx="1.6" fill="#3da597"/>
+        <path d="M7 3.8 L10.2 7.4 H8.2 V10.4 H5.8 V7.4 H3.8 Z" fill="#fff"/>
+      </symbol>
+
+      <!-- PRIORITY: HIGHEST — red double up chevron -->
+      <symbol id="ic-pri-highest" viewBox="0 0 14 14">
+        <path d="M2 8 L7 3 L12 8" fill="none" stroke="#cd1316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M2 12 L7 7 L12 12" fill="none" stroke="#cd1316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+
+      <!-- PRIORITY: HIGH — red single up chevron -->
+      <symbol id="ic-pri-high" viewBox="0 0 14 14">
+        <path d="M2 10 L7 5 L12 10" fill="none" stroke="#d04437" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+
+      <!-- PRIORITY: MEDIUM — orange equals -->
+      <symbol id="ic-pri-medium" viewBox="0 0 14 14">
+        <path d="M2.5 6 H11.5 M2.5 9 H11.5" fill="none" stroke="#ea7d24" stroke-width="2.2" stroke-linecap="round"/>
+      </symbol>
+
+      <!-- PRIORITY: LOW — blue single down chevron -->
+      <symbol id="ic-pri-low" viewBox="0 0 14 14">
+        <path d="M2 5 L7 10 L12 5" fill="none" stroke="#2684ff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+
+      <!-- PRIORITY: LOWEST — blue double down chevron -->
+      <symbol id="ic-pri-lowest" viewBox="0 0 14 14">
+        <path d="M2 3 L7 8 L12 3" fill="none" stroke="#4598df" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M2 7 L7 12 L12 7" fill="none" stroke="#4598df" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <div class="frame" aria-label="iPhone 14 frame">
+    <main class="phone">
+      <div class="island" aria-hidden="true"></div>
+      <div class="statusbar">
+        <div>9:41</div>
+        <div class="system-icons" aria-hidden="true">
+          <span class="signal"><i></i><i></i><i></i><i></i></span>
+          <span class="wifi"></span>
+          <span class="battery"></span>
+        </div>
+      </div>
+
+      <div class="app">
+        <header class="top">
+          <div class="profile">
+            <div class="avatar" aria-hidden="true"></div>
+            <div>
+              <div class="hello">Good day,</div>
+              <div class="name">Anand</div>
+            </div>
+          </div>
+          <div class="agent-pill">
+            <div class="agent-stack" aria-hidden="true">
+              <span class="agent-face">C</span>
+              <span class="agent-face">G</span>
+            </div>
+            <span class="agent-count">3</span>
+          </div>
+        </header>
+
+        <section class="content" aria-label="Ticket view">
+          <div class="subhead">
+            <h1>Tickets</h1>
+            <span>8 assigned to you</span>
+          </div>
+
+          <!-- 1 · BUG · child of PAY-9700 · Highest · hot -->
+          <article class="ticket hot">
+            <div class="ticket-top">
+              <div class="ticket-meta">
+                <svg class="jira-icon" aria-label="Bug"><use href="#ic-bug"/></svg>
+                <svg class="jira-icon" aria-label="Highest"><use href="#ic-pri-highest"/></svg>
+                <span class="ref">PAY-9842</span>
+                <span class="chip">payment_intents / 3ds</span>
+              </div>
+              <span class="age">3h</span>
+            </div>
+            <div>
+              <div class="epic-link">part of <span class="epic-ref">PAY-9700</span> · SCA rollout</div>
+              <h2 class="ticket-title">3DS challenge URL expires before redirect in iOS WKWebView</h2>
+              <p class="ticket-desc">In-app payments via WKWebView hit <code>session_expired</code> on the 3DS challenge page when redirect exceeds ~90s. Affects ~0.3% of EU card payments. Suspect <code>acsUrl</code> signed-token TTL not accounting for WebView cold start. Repro + tcpdump in #pay-oncall.</p>
+            </div>
+            <div class="action-row">
+              <button class="action primary">Plan &amp; dispatch</button>
+              <button class="action">Dispatch</button>
+              <button class="action icon" aria-label="More">⋯</button>
+            </div>
+          </article>
+
+          <!-- 2 · STORY · BILL · High -->
+          <article class="ticket">
+            <div class="ticket-top">
+              <div class="ticket-meta">
+                <svg class="jira-icon" aria-label="Story"><use href="#ic-story"/></svg>
+                <svg class="jira-icon" aria-label="High"><use href="#ic-pri-high"/></svg>
+                <span class="ref">BILL-4521</span>
+                <span class="chip">subscriptions / proration</span>
+              </div>
+              <span class="age">5d</span>
+            </div>
+            <div>
+              <h2 class="ticket-title">Prorate mid-cycle upgrades for annual subscriptions</h2>
+              <p class="ticket-desc">Merchants on annual plans need a clean upgrade-to-higher-tier flow that prorates the remaining balance correctly with discounts, tax, and add-ons in the mix. Spec attached; sub-tasks track proration calc, invoice line items, and refund handling.</p>
+              <div class="subtask-count"><span class="done">2</span> <span class="of">/ 5 sub-tasks complete</span></div>
+            </div>
+            <div class="action-row">
+              <button class="action primary">Plan &amp; dispatch</button>
+              <button class="action">View sub-tasks</button>
+              <button class="action icon" aria-label="More">⋯</button>
+            </div>
+          </article>
+
+          <!-- 3 · BUG · child of PAY-9700 · High -->
+          <article class="ticket">
+            <div class="ticket-top">
+              <div class="ticket-meta">
+                <svg class="jira-icon" aria-label="Bug"><use href="#ic-bug"/></svg>
+                <svg class="jira-icon" aria-label="High"><use href="#ic-pri-high"/></svg>
+                <span class="ref">PAY-9881</span>
+                <span class="chip">idempotency / ach</span>
+              </div>
+              <span class="age">1d</span>
+            </div>
+            <div>
+              <div class="epic-link">part of <span class="epic-ref">PAY-9700</span> · SCA rollout</div>
+              <h2 class="ticket-title">Idempotency cache TTL expires during ACH return retry storms</h2>
+              <p class="ticket-desc">During Monday-morning ACH return spikes, the 24h idempotency cache occasionally evicts entries before the merchant's exponential backoff completes. Result: a small number of returns get reprocessed and create duplicate refund attempts. Need to either extend TTL or pin entries during active retries.</p>
+            </div>
+            <div class="action-row">
+              <button class="action primary">Plan &amp; dispatch</button>
+              <button class="action">Dispatch</button>
+              <button class="action icon" aria-label="More">⋯</button>
+            </div>
+          </article>
+
+          <!-- 4 · BUG · CONN · High · In Progress -->
+          <article class="ticket">
+            <div class="ticket-top">
+              <div class="ticket-meta">
+                <svg class="jira-icon" aria-label="Bug"><use href="#ic-bug"/></svg>
+                <svg class="jira-icon" aria-label="High"><use href="#ic-pri-high"/></svg>
+                <span class="ref">CONN-3318</span>
+                <span class="chip status-progress">IN PROGRESS</span>
+              </div>
+              <span class="age">6d</span>
+            </div>
+            <div>
+              <h2 class="ticket-title">Express onboarding rejects business names with non-ASCII characters</h2>
+              <p class="ticket-desc">Account creation returns HTTP 422 when <code>business_profile.name</code> contains characters outside Latin-1 (e.g. <code>株式会社</code>, <code>Müller</code>, <code>São</code>). Validation regex too strict. Blocking JP / DE / BR Express signups. Fix should align with our existing UTF-8 stance for display name fields.</p>
+            </div>
+            <div class="action-row">
+              <button class="action primary">Plan &amp; dispatch</button>
+              <button class="action">Dispatch</button>
+              <button class="action icon" aria-label="More">⋯</button>
+            </div>
+          </article>
+
+          <!-- 5 · BUG · TREAS · High -->
+          <article class="ticket">
+            <div class="ticket-top">
+              <div class="ticket-meta">
+                <svg class="jira-icon" aria-label="Bug"><use href="#ic-bug"/></svg>
+                <svg class="jira-icon" aria-label="High"><use href="#ic-pri-high"/></svg>
+                <span class="ref">TREAS-512</span>
+                <span class="chip">treasury / wires</span>
+              </div>
+              <span class="age">2d</span>
+            </div>
+            <div>
+              <h2 class="ticket-title">Outbound wires fail validation when SWIFT BIC has 11 characters</h2>
+              <p class="ticket-desc">SWIFT BICs are 8 or 11 chars — 11-char includes the branch identifier. Our wire-creation validator only accepts 8-char codes and rejects 11-char with <code>invalid_bic</code>. Blocks ~14% of outbound EUR / GBP wires. Spec is BIC ISO 9362.</p>
+            </div>
+            <div class="action-row">
+              <button class="action primary">Plan &amp; dispatch</button>
+              <button class="action">Dispatch</button>
+              <button class="action icon" aria-label="More">⋯</button>
+            </div>
+          </article>
+
+          <!-- 6 · IMPROVEMENT · RAD · Medium -->
+          <article class="ticket">
+            <div class="ticket-top">
+              <div class="ticket-meta">
+                <svg class="jira-icon" aria-label="Improvement"><use href="#ic-improvement"/></svg>
+                <svg class="jira-icon" aria-label="Medium"><use href="#ic-pri-medium"/></svg>
+                <span class="ref">RAD-892</span>
+                <span class="chip">radar / ml</span>
+              </div>
+              <span class="age">3d</span>
+            </div>
+            <div>
+              <h2 class="ticket-title">Add IP-velocity feature to Radar ML training pipeline</h2>
+              <p class="ticket-desc">Current fraud models don't include short-window IP-level velocity features. Backtests show <code>charges_per_ip_per_hour</code> is a top-15 signal for new-account fraud (notebook attached). Wire it into the feature pipeline behind a flag; we'll A/B before production.</p>
+            </div>
+            <div class="action-row">
+              <button class="action primary">Plan &amp; dispatch</button>
+              <button class="action">Dispatch</button>
+              <button class="action icon" aria-label="More">⋯</button>
+            </div>
+          </article>
+
+          <!-- 7 · BUG · WEBHOOK · Medium -->
+          <article class="ticket">
+            <div class="ticket-top">
+              <div class="ticket-meta">
+                <svg class="jira-icon" aria-label="Bug"><use href="#ic-bug"/></svg>
+                <svg class="jira-icon" aria-label="Medium"><use href="#ic-pri-medium"/></svg>
+                <span class="ref">WH-2204</span>
+                <span class="chip">webhook_dispatcher</span>
+              </div>
+              <span class="age">4d</span>
+            </div>
+            <div>
+              <h2 class="ticket-title">Webhook retries amplify on merchants with flaky DNS</h2>
+              <p class="ticket-desc">When a merchant endpoint resolves slowly (&gt;5s DNS), the retry queue marks the attempt failed and reschedules, but the in-flight request can still succeed. Result: same event delivered twice in a ~30m window. Should cancel in-flight on retry schedule, or treat slow-DNS as a soft failure.</p>
+            </div>
+            <div class="action-row">
+              <button class="action primary">Plan &amp; dispatch</button>
+              <button class="action">Dispatch</button>
+              <button class="action icon" aria-label="More">⋯</button>
+            </div>
+          </article>
+
+          <!-- 8 · STORY · ISSU · Medium -->
+          <article class="ticket">
+            <div class="ticket-top">
+              <div class="ticket-meta">
+                <svg class="jira-icon" aria-label="Story"><use href="#ic-story"/></svg>
+                <svg class="jira-icon" aria-label="Medium"><use href="#ic-pri-medium"/></svg>
+                <span class="ref">ISSU-1187</span>
+                <span class="chip">issuing / authorizations</span>
+              </div>
+              <span class="age">1w</span>
+            </div>
+            <div>
+              <h2 class="ticket-title">Support extended authorization holds for hotel and rental MCC codes</h2>
+              <p class="ticket-desc">Cards in MCC 7011 (hotels) and 7512 (auto rental) typically hold an authorization for the duration of stay (1–7 days). Today we expire holds at 7 days for all MCC codes. Spec out a per-MCC hold-duration policy aligned with Visa Operating Regulations §V.4.2.</p>
+            </div>
+            <div class="action-row">
+              <button class="action primary">Plan &amp; dispatch</button>
+              <button class="action">Dispatch</button>
+              <button class="action icon" aria-label="More">⋯</button>
+            </div>
+          </article>
+
+        </section>
+
+        <nav class="bottom-nav" aria-label="Primary">
+          <button class="nav-item active">
+            <span class="nav-icon ticket" aria-hidden="true"></span>
+            <span>Tickets</span>
+          </button>
+          <button class="nav-item">
+            <span class="nav-icon pr" aria-hidden="true"></span>
+            <span>PRs</span>
+          </button>
+        </nav>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
