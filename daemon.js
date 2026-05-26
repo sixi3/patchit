@@ -1,4 +1,5 @@
 const http = require("http");
+const https = require("https");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -12,11 +13,16 @@ const CLAUDE_BIN = process.env.CLAUDE_BIN || findClaudeBin();
 const WORKSPACE_STORE = path.join(ROOT, ".loupe-workspaces.json");
 const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 const CODEX_SESSIONS_DIR = path.join(CODEX_HOME, "sessions");
+const LOUPE_HOME = process.env.LOUPE_HOME || path.join(os.homedir(), ".loupe");
+const CONFIG_FILE = path.join(LOUPE_HOME, "config.json");
 
 const sessions = new Map();
 const recentRequests = [];
 const workspaces = getConfiguredWorkspaces();
 const harnessRegistry = buildHarnessRegistry();
+let config = loadConfig();
+// Cache the GitHub inbox briefly so the PWA can re-render without hammering the API.
+const inboxCache = { fetchedAt: 0, ttlMs: 60_000, payload: null };
 
 function findClaudeBin() {
   // 1. claude on PATH
@@ -72,6 +78,157 @@ function defaultHarnessId() {
   const claude = getHarness("claude-code");
   if (claude?.available) return "claude-code";
   return "codex";
+}
+
+// ---------- Config ----------
+// ~/.loupe/config.json holds BYOK credentials. Token never leaves the daemon
+// process; the PWA only learns whether one is configured.
+
+function loadConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function saveConfig() {
+  fs.mkdirSync(LOUPE_HOME, { recursive: true });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+  // Restrict to user-only — these are secrets.
+  try { fs.chmodSync(CONFIG_FILE, 0o600); } catch {}
+}
+
+function configSummary() {
+  return {
+    github: {
+      configured: !!config.githubToken,
+      login: config.githubLogin || null
+    }
+  };
+}
+
+// ---------- Git ----------
+// Parse each workspace's origin remote to bind it to a GitHub repo. Cheap
+// enough to do on every inbox refresh; no caching.
+
+function workspaceRepoBinding(workspace) {
+  try {
+    const result = spawnSync("git", ["-C", workspace.path, "remote", "get-url", "origin"], { timeout: 1500 });
+    if (result.status !== 0) return null;
+    const url = result.stdout.toString().trim();
+    return parseGithubRemote(url);
+  } catch {
+    return null;
+  }
+}
+
+function parseGithubRemote(remote) {
+  if (!remote) return null;
+  // Handle ssh (git@github.com:owner/repo.git) and https (https://github.com/owner/repo.git)
+  const ssh = remote.match(/^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/i);
+  if (ssh) return { host: "github.com", owner: ssh[1], repo: ssh[2] };
+  const https = remote.match(/^https?:\/\/(?:[^@]+@)?github\.com\/([^/]+)\/(.+?)(?:\.git)?\/?$/i);
+  if (https) return { host: "github.com", owner: https[1], repo: https[2] };
+  return null;
+}
+
+function listWorkspaceBindings() {
+  return workspaces
+    .map((workspace) => {
+      const binding = workspaceRepoBinding(workspace);
+      return binding ? { workspaceId: workspace.id, workspacePath: workspace.path, ...binding } : null;
+    })
+    .filter(Boolean);
+}
+
+// ---------- GitHub API ----------
+// Minimal HTTPS-only client. Uses search/issues so we can scope to assignee:@me
+// across every repo the token can see in one call, then enriches with PR review
+// requests in a second call. Enough for the demo inbox.
+
+function githubRequest(pathname, token) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: "api.github.com",
+      path: pathname,
+      method: "GET",
+      headers: {
+        "user-agent": "loupe-mac-daemon",
+        accept: "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+        authorization: `Bearer ${token}`
+      }
+    }, (res) => {
+      let body = "";
+      res.on("data", (chunk) => { body += chunk; });
+      res.on("end", () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          try { resolve(JSON.parse(body)); } catch (error) { reject(error); }
+        } else {
+          const err = new Error(`GitHub ${res.statusCode}: ${body.slice(0, 300)}`);
+          err.statusCode = res.statusCode;
+          reject(err);
+        }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(15_000, () => req.destroy(new Error("GitHub request timeout")));
+    req.end();
+  });
+}
+
+async function fetchGithubInbox(token) {
+  // Two queries, one assignee one review-requested. Search API supports both.
+  const [assignedIssues, reviewRequests, viewer] = await Promise.all([
+    githubRequest(`/search/issues?q=${encodeURIComponent("assignee:@me is:open archived:false")}&per_page=30&sort=updated`, token),
+    githubRequest(`/search/issues?q=${encodeURIComponent("is:pr is:open review-requested:@me archived:false")}&per_page=30&sort=updated`, token),
+    githubRequest("/user", token)
+  ]);
+
+  // Persist login on first fetch so we can show it in config summary.
+  if (viewer?.login && config.githubLogin !== viewer.login) {
+    config.githubLogin = viewer.login;
+    saveConfig();
+  }
+
+  const bindings = listWorkspaceBindings();
+  function bindingFor(repoFullName) {
+    if (!repoFullName) return null;
+    const [owner, repo] = repoFullName.split("/");
+    return bindings.find((b) => b.owner.toLowerCase() === owner.toLowerCase() && b.repo.toLowerCase() === repo.toLowerCase()) || null;
+  }
+
+  function normalize(item, kind) {
+    // search/issues returns issues and PRs together; pull_request is non-null for PRs.
+    const repoFullName = (item.repository_url || "").replace("https://api.github.com/repos/", "");
+    return {
+      kind, // "issue" or "review"
+      id: item.id,
+      number: item.number,
+      title: item.title,
+      body: (item.body || "").slice(0, 4000),
+      url: item.html_url,
+      state: item.state,
+      isPr: !!item.pull_request,
+      labels: (item.labels || []).map((l) => l.name),
+      repo: repoFullName,
+      updatedAt: item.updated_at,
+      createdAt: item.created_at,
+      author: item.user?.login || null,
+      binding: bindingFor(repoFullName)
+    };
+  }
+
+  const assigned = (assignedIssues.items || []).map((item) => normalize(item, "issue"));
+  const reviews = (reviewRequests.items || []).map((item) => normalize(item, "review"));
+
+  return {
+    fetchedAt: new Date().toISOString(),
+    viewer: { login: viewer?.login, avatarUrl: viewer?.avatar_url },
+    assigned,
+    reviews
+  };
 }
 
 const mimeTypes = {
@@ -677,10 +834,62 @@ const server = http.createServer(async (req, res) => {
       sessions: sessions.size,
       urls: getNetworkUrls(),
       workspaces,
+      workspaceBindings: listWorkspaceBindings(),
       fsRoots: getFsRoots(),
       codexUsage: getCodexUsage(),
-      recentRequests
+      recentRequests,
+      config: configSummary()
     });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/config/github") {
+    try {
+      const body = JSON.parse(await readBody(req) || "{}");
+      const token = String(body.token || "").trim();
+      if (!token) {
+        // Clearing the token is allowed — null it out.
+        delete config.githubToken;
+        delete config.githubLogin;
+        saveConfig();
+        inboxCache.fetchedAt = 0;
+        inboxCache.payload = null;
+        sendJson(res, 200, { ok: true, cleared: true, config: configSummary() });
+        return;
+      }
+      // Probe the token before persisting so we don't save garbage.
+      const viewer = await githubRequest("/user", token);
+      config.githubToken = token;
+      config.githubLogin = viewer.login;
+      saveConfig();
+      inboxCache.fetchedAt = 0;
+      inboxCache.payload = null;
+      sendJson(res, 200, { ok: true, login: viewer.login, config: configSummary() });
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/github/inbox") {
+    try {
+      if (!config.githubToken) {
+        sendJson(res, 400, { ok: false, error: "GitHub token not configured. POST a token to /api/config/github." });
+        return;
+      }
+      const force = url.searchParams.get("refresh") === "1";
+      const fresh = inboxCache.payload && (Date.now() - inboxCache.fetchedAt) < inboxCache.ttlMs;
+      if (!force && fresh) {
+        sendJson(res, 200, { ok: true, cached: true, ...inboxCache.payload });
+        return;
+      }
+      const payload = await fetchGithubInbox(config.githubToken);
+      inboxCache.fetchedAt = Date.now();
+      inboxCache.payload = payload;
+      sendJson(res, 200, { ok: true, cached: false, ...payload });
+    } catch (error) {
+      sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
+    }
     return;
   }
 

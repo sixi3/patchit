@@ -548,7 +548,8 @@
       font-size: 11px;
     }
 
-    .session-view {
+    .session-view,
+    .inbox-view {
       position: fixed;
       inset: 0;
       z-index: 60;
@@ -556,6 +557,160 @@
       grid-template-rows: auto 1fr;
       background: var(--bg);
     }
+
+    .inbox-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border: 1px solid var(--line-hot);
+      border-radius: 999px;
+      background: var(--panel-2);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .inbox-toggle .count {
+      background: var(--yellow);
+      color: #101216;
+      border-radius: 999px;
+      padding: 1px 7px;
+      font-weight: 700;
+      min-width: 17px;
+      text-align: center;
+    }
+
+    .inbox-toggle.empty .count {
+      background: var(--line);
+      color: var(--muted);
+    }
+
+    .inbox-body {
+      min-height: 0;
+      overflow-y: auto;
+      padding: 14px;
+      display: grid;
+      align-content: start;
+      gap: 10px;
+      scrollbar-width: thin;
+    }
+
+    .inbox-section {
+      display: grid;
+      gap: 8px;
+    }
+
+    .inbox-section-title {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 6px 4px 0;
+    }
+
+    .inbox-card {
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      padding: 12px;
+      display: grid;
+      gap: 7px;
+      cursor: pointer;
+      color: inherit;
+      font: inherit;
+    }
+
+    .inbox-card:hover { border-color: var(--line-hot); }
+    .inbox-card[disabled] { opacity: 0.55; cursor: not-allowed; }
+
+    .inbox-card-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .inbox-card-title {
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.35;
+      font-weight: 600;
+    }
+
+    .inbox-card-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      align-items: center;
+    }
+
+    .inbox-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel-2);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    .inbox-tag.bind { color: var(--green); border-color: rgba(126, 231, 135, 0.35); }
+    .inbox-tag.nobind { color: var(--red); border-color: rgba(255, 123, 114, 0.35); }
+    .inbox-tag.review { color: var(--blue); border-color: rgba(121, 192, 255, 0.35); }
+    .inbox-tag.issue { color: var(--yellow); border-color: rgba(242, 204, 96, 0.35); }
+
+    .inbox-connect {
+      border: 1px dashed var(--line-hot);
+      border-radius: 10px;
+      background: var(--panel);
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .inbox-connect h3 {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .inbox-connect p {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .inbox-connect input {
+      width: 100%;
+      border: 1px solid var(--line-hot);
+      background: var(--panel-2);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .inbox-connect-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .inbox-connect-actions .mini-btn { min-height: 34px; }
 
     .session-header {
       display: grid;
@@ -762,10 +917,15 @@
           <div class="mark">~/</div>
           <div>
             <h1>loupe</h1>
-            <p class="subtitle">local codex bridge</p>
+            <p class="subtitle">local agent bridge</p>
           </div>
         </div>
-        <div class="pill" id="daemonPill"><span class="dot"></span><span id="daemonPillText">checking</span></div>
+        <div class="bar-row" style="gap: 8px;">
+          <button type="button" class="inbox-toggle empty" id="inboxToggle" aria-label="Inbox">
+            <span>inbox</span><span class="count" id="inboxCount">0</span>
+          </button>
+          <div class="pill" id="daemonPill"><span class="dot"></span><span id="daemonPillText">checking</span></div>
+        </div>
       </div>
       <div class="session-strip" id="sessionStrip" aria-label="Sessions"></div>
     </header>
@@ -839,6 +999,20 @@
     <main class="session-body" id="sessionBody"></main>
   </section>
 
+  <section class="inbox-view" id="inboxView" hidden>
+    <header class="session-header">
+      <div class="session-header-top">
+        <button class="back-btn" id="closeInbox" type="button">back</button>
+        <div class="session-heading">
+          <h2 id="inboxTitle">Inbox</h2>
+          <p class="session-meta" id="inboxSubtitle">Connect GitHub to see what's assigned to you.</p>
+        </div>
+        <button class="back-btn" id="refreshInbox" type="button">refresh</button>
+      </div>
+    </header>
+    <main class="inbox-body" id="inboxBody"></main>
+  </section>
+
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script>
@@ -852,7 +1026,8 @@
       eventSource: null,
       running: false,
       fsPath: null,
-      fsListing: null
+      fsListing: null,
+      inbox: { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null }
     };
 
     const $ = (selector) => document.querySelector(selector);
@@ -1392,12 +1567,204 @@
       renderHarnesses();
     });
 
+    // ---------- Inbox ----------
+
+    function inboxTotal() {
+      return state.inbox.assigned.length + state.inbox.reviews.length;
+    }
+
+    function renderInboxBadge() {
+      const toggle = $("#inboxToggle");
+      const count = $("#inboxCount");
+      const total = inboxTotal();
+      count.textContent = total;
+      toggle.classList.toggle("empty", total === 0);
+    }
+
+    function openInbox() {
+      $("#inboxView").hidden = false;
+      // First-open eager-load only; explicit refresh uses the button.
+      if (!state.inbox.fetchedAt && !state.inbox.loading) loadInbox();
+      renderInbox();
+    }
+
+    function closeInbox() { $("#inboxView").hidden = true; }
+
+    async function loadInbox({ force } = {}) {
+      state.inbox.loading = true;
+      state.inbox.error = null;
+      renderInbox();
+      try {
+        const url = `/api/github/inbox${force ? "?refresh=1" : ""}`;
+        const response = await fetch(url, { cache: "no-store" });
+        const data = await response.json();
+        if (response.status === 400 && data.error?.toLowerCase().includes("token")) {
+          state.inbox = { ...state.inbox, loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null };
+          renderInbox(); renderInboxBadge();
+          return;
+        }
+        if (!response.ok || !data.ok) throw new Error(data.error || "Could not load inbox");
+        state.inbox = {
+          loading: false,
+          connected: true,
+          viewer: data.viewer,
+          assigned: data.assigned || [],
+          reviews: data.reviews || [],
+          error: null,
+          fetchedAt: data.fetchedAt
+        };
+      } catch (error) {
+        state.inbox.loading = false;
+        state.inbox.error = error.message;
+      }
+      renderInbox();
+      renderInboxBadge();
+    }
+
+    async function connectGithub() {
+      const input = $("#githubTokenInput");
+      const token = (input?.value || "").trim();
+      if (!token) {
+        toast("Paste a GitHub token first.");
+        return;
+      }
+      try {
+        const response = await fetch("/api/config/github", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Could not save token");
+        toast(`Connected as @${data.login}.`);
+        await loadInbox({ force: true });
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+
+    function dispatchTicket(ticket) {
+      const composer = $("#messageInput");
+      const labels = ticket.labels?.length ? `Labels: ${ticket.labels.join(", ")}\n` : "";
+      composer.value =
+        `[${ticket.kind === "review" ? "Review" : "Implement"} ${ticket.repo}#${ticket.number}]\n` +
+        `${ticket.title}\n\n` +
+        `${ticket.body ? ticket.body + "\n\n" : ""}` +
+        `${labels}` +
+        `URL: ${ticket.url}\n\n` +
+        `---\n` +
+        (ticket.kind === "review"
+          ? `Review this pull request. Summarize what it changes, flag risks, and suggest follow-ups. Do not modify files.`
+          : `Implement the change described above. When done, summarize what you did and list every file you touched. Do not push or open a PR yet.`);
+      // Auto-pick the bound workspace if one exists.
+      if (ticket.binding?.workspaceId) state.workspaceId = ticket.binding.workspaceId;
+      renderHealth();
+      closeInbox();
+      toast(ticket.binding ? `Loaded ${ticket.repo}#${ticket.number} in ${ticket.binding.workspacePath.split("/").pop()}` : `Loaded ${ticket.repo}#${ticket.number}. Pick a workspace.`);
+    }
+
+    function renderInbox() {
+      const subtitle = $("#inboxSubtitle");
+      const body = $("#inboxBody");
+      const { loading, connected, viewer, assigned, reviews, error, fetchedAt } = state.inbox;
+
+      if (loading) {
+        subtitle.textContent = "Loading...";
+        body.innerHTML = `<div class="empty">Fetching from GitHub...</div>`;
+        return;
+      }
+
+      if (error) {
+        subtitle.textContent = "Inbox error";
+        body.innerHTML = `<div class="empty">${escapeHtml(error)}</div>`;
+        return;
+      }
+
+      if (!connected) {
+        subtitle.textContent = "Not connected";
+        body.innerHTML = `
+          <div class="inbox-connect">
+            <h3>Connect GitHub</h3>
+            <p>Paste a GitHub personal access token with <span class="action-command">repo</span> scope. The token is stored at <span class="action-command">~/.loupe/config.json</span> on this Mac and never sent to the phone. <a href="https://github.com/settings/tokens/new?description=loupe&scopes=repo" target="_blank" rel="noopener">Create one →</a></p>
+            <input id="githubTokenInput" type="password" autocomplete="off" placeholder="ghp_..." />
+            <div class="inbox-connect-actions">
+              <button type="button" class="mini-btn primary" id="connectGithub">connect</button>
+            </div>
+          </div>
+        `;
+        $("#connectGithub").addEventListener("click", connectGithub);
+        return;
+      }
+
+      subtitle.textContent = `@${viewer?.login || "you"} · ${fetchedAt ? new Date(fetchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}`;
+
+      const renderCard = (item) => {
+        const kindClass = item.kind === "review" ? "review" : "issue";
+        const kindLabel = item.kind === "review" ? "review" : item.isPr ? "pr" : "issue";
+        const bindTag = item.binding
+          ? `<span class="inbox-tag bind">${escapeHtml(item.binding.workspacePath.split("/").pop())}</span>`
+          : `<span class="inbox-tag nobind">no workspace</span>`;
+        const labels = (item.labels || []).slice(0, 3).map((l) => `<span class="inbox-tag">${escapeHtml(l)}</span>`).join("");
+        return `
+          <button class="inbox-card" type="button" data-ticket-id="${escapeHtml(String(item.id))}">
+            <div class="inbox-card-top">
+              <span>${escapeHtml(item.repo)}#${escapeHtml(String(item.number))}</span>
+              <span>${escapeHtml(new Date(item.updatedAt).toLocaleString())}</span>
+            </div>
+            <div class="inbox-card-title">${escapeHtml(item.title)}</div>
+            <div class="inbox-card-meta">
+              <span class="inbox-tag ${kindClass}">${escapeHtml(kindLabel)}</span>
+              ${bindTag}
+              ${labels}
+            </div>
+          </button>
+        `;
+      };
+
+      const sections = [];
+      if (reviews.length) {
+        sections.push(`
+          <section class="inbox-section">
+            <h3 class="inbox-section-title">PRs awaiting your review · ${reviews.length}</h3>
+            ${reviews.map(renderCard).join("")}
+          </section>
+        `);
+      }
+      if (assigned.length) {
+        sections.push(`
+          <section class="inbox-section">
+            <h3 class="inbox-section-title">Assigned to you · ${assigned.length}</h3>
+            ${assigned.map(renderCard).join("")}
+          </section>
+        `);
+      }
+      if (!sections.length) {
+        body.innerHTML = `<div class="empty">Inbox zero. Nothing assigned to @${escapeHtml(viewer?.login || "you")} right now.</div>`;
+        return;
+      }
+      body.innerHTML = sections.join("");
+    }
+
+    $("#inboxToggle").addEventListener("click", openInbox);
+    $("#closeInbox").addEventListener("click", closeInbox);
+    $("#refreshInbox").addEventListener("click", () => loadInbox({ force: true }));
+    $("#inboxBody").addEventListener("click", (event) => {
+      const card = event.target.closest("[data-ticket-id]");
+      if (!card) return;
+      const id = card.dataset.ticketId;
+      const ticket = [...state.inbox.assigned, ...state.inbox.reviews].find((t) => String(t.id) === id);
+      if (ticket) dispatchTicket(ticket);
+    });
+
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
     }
 
     renderSessions();
-    checkHealth();
+    renderInboxBadge();
+    checkHealth().then(() => {
+      if (state.health?.config?.github?.configured) loadInbox();
+    });
   </script>
 </body>
 </html>
