@@ -707,6 +707,7 @@ function listFolders(dirPath) {
 
 function sendJson(res, status, payload) {
   if (res.writableEnded) return;
+  const body = JSON.stringify(payload);
   if (res.headersSent) {
     res.end();
     return;
@@ -715,7 +716,7 @@ function sendJson(res, status, payload) {
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": "*"
   });
-  res.end(JSON.stringify(payload));
+  res.end(body);
 }
 
 function isPublicApi(pathname) {
@@ -1196,21 +1197,79 @@ function blueprintCachePath(ticket, workspace) {
   return path.join(BLUEPRINT_CACHE_DIR, `${repoName}.${ticketHash(ticket)}.${safeCacheName(repoHeadSha(workspace))}.json`);
 }
 
+function blueprintCachePrefix(ticket, workspace) {
+  const binding = workspaceRepoBinding(workspace);
+  const repoName = safeCacheName(ticket.repo || (binding ? `${binding.owner}-${binding.repo}` : workspace.name));
+  return `${repoName}.${ticketHash(ticket)}.`;
+}
+
+function readBlueprintCacheFile(filePath, ticket, workspace, { stale = false } = {}) {
+  const cached = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  const blueprint = normalizeBlueprint(cached, ticket, workspace, cached.provider || cached._provider || "cache", {
+    cached: true,
+    cachePath: filePath,
+    repoSha: cached.repoSha || cached._repo_sha,
+    ticketHash: cached.ticketHash || cached._ticket_hash,
+    costUsd: cached.costUsd ?? cached._cost_usd,
+    durationMs: cached.durationMs ?? cached._duration_ms,
+    model: cached.model || cached._model
+  });
+  if (stale) {
+    blueprint.stale = true;
+    blueprint.staleReason = "Repo HEAD changed since this Blueprint was generated.";
+  }
+  return blueprint;
+}
+
+function publicBlueprint(blueprint) {
+  if (!blueprint) return null;
+  return {
+    id: blueprint.id,
+    createdAt: blueprint.createdAt,
+    outcome: blueprint.outcome,
+    missingInfo: blueprint.missingInfo || [],
+    summary: blueprint.summary,
+    size: blueprint.size,
+    files: blueprint.files || [],
+    deps: blueprint.deps || [],
+    migrations: blueprint.migrations || [],
+    riskAreas: blueprint.riskAreas || [],
+    outOfScope: blueprint.outOfScope || [],
+    openQuestions: blueprint.openQuestions || [],
+    defaultAgent: blueprint.defaultAgent || null,
+    blueprintConfidence: blueprint.blueprintConfidence ?? blueprint.confidence ?? null,
+    provider: blueprint.provider,
+    cached: !!blueprint.cached,
+    stale: !!blueprint.stale,
+    staleReason: blueprint.staleReason || null,
+    repoSha: blueprint.repoSha || null,
+    ticketHash: blueprint.ticketHash || null,
+    likelyFiles: blueprint.likelyFiles || (blueprint.files || []).map((file) => file.path).filter(Boolean),
+    risks: blueprint.risks || [],
+    tests: blueprint.tests || [],
+    confidence: blueprint.confidence ?? blueprint.blueprintConfidence ?? null
+  };
+}
+
 function readCachedBlueprintForTicket(ticket, workspace) {
+  const exactPath = blueprintCachePath(ticket, workspace);
   try {
-    const cachePath = blueprintCachePath(ticket, workspace);
-    const cached = JSON.parse(fs.readFileSync(cachePath, "utf8"));
-    return normalizeBlueprint(cached, ticket, workspace, cached.provider || cached._provider || "cache", {
-      cached: true,
-      cachePath,
-      repoSha: cached.repoSha || cached._repo_sha,
-      ticketHash: cached.ticketHash || cached._ticket_hash,
-      costUsd: cached.costUsd ?? cached._cost_usd,
-      durationMs: cached.durationMs ?? cached._duration_ms,
-      model: cached.model || cached._model
-    });
+    return publicBlueprint(readBlueprintCacheFile(exactPath, ticket, workspace));
   } catch {
-    return { status: "not_started" };
+    try {
+      const prefix = blueprintCachePrefix(ticket, workspace);
+      const candidates = fs.readdirSync(BLUEPRINT_CACHE_DIR)
+        .filter((name) => name.startsWith(prefix) && name.endsWith(".json"))
+        .map((name) => {
+          const filePath = path.join(BLUEPRINT_CACHE_DIR, name);
+          return { filePath, mtimeMs: fs.statSync(filePath).mtimeMs };
+        })
+        .sort((a, b) => b.mtimeMs - a.mtimeMs);
+      if (candidates.length) {
+        return publicBlueprint(readBlueprintCacheFile(candidates[0].filePath, ticket, workspace, { stale: true }));
+      }
+    } catch {}
+    return null;
   }
 }
 

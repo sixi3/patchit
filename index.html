@@ -2468,6 +2468,10 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
       return `${migration.kind || "schema"} / ${migration.risk || "medium"}${migration.purpose ? ` - ${migration.purpose}` : ""}`;
     }
 
+    function isUsableBlueprint(blueprint) {
+      return !!blueprint && blueprint.status !== "not_started" && !!blueprint.outcome;
+    }
+
     function blueprintSection(title, items, formatter, emptyText, open = false) {
       const normalized = (items || []).map(formatter).filter(Boolean);
       const list = normalized.length
@@ -2483,7 +2487,7 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
 
     function renderBlueprintDrawer(ticket) {
       const blueprint = ticket.blueprint;
-      if (!blueprint) {
+      if (!isUsableBlueprint(blueprint)) {
         return `
           <div class="blueprint-drawer">
             <div class="inbox-card-meta">
@@ -2506,8 +2510,9 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
             <span class="inbox-tag ${blocked ? "nobind" : "bind"}">${blocked ? "needs info" : "ready"}</span>
             <span class="inbox-tag">${escapeHtml(blueprint.size || "M")}</span>
             ${blueprint.cached ? `<span class="inbox-tag">cached</span>` : ""}
+            ${blueprint.stale ? `<span class="inbox-tag nobind">stale</span>` : ""}
           </div>
-          <div class="blueprint-summary">${escapeHtml(blueprint.summary || (blocked ? "Ticket needs clarification before dispatch." : "Blueprint is ready for review."))}</div>
+          <div class="blueprint-summary">${escapeHtml(blueprint.summary || (blocked ? "Ticket needs clarification before dispatch." : "Blueprint is ready for review."))}${blueprint.stale ? `<br><span class="session-meta">${escapeHtml(blueprint.staleReason || "Repo changed since this Blueprint was generated.")}</span>` : ""}</div>
           <div class="blueprint-sections">
             ${blocked ? blueprintSection("missing info", blueprint.missingInfo, (item) => item, "No specific gaps returned.", true) : ""}
             ${blueprintSection("predicted files", files, blueprintFileLabel, "No specific files predicted.", !blocked)}
@@ -2535,7 +2540,7 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
 
     function dispatchBlueprintFromPreview(ticket) {
       const plan = ticket.blueprint;
-      if (!plan) {
+      if (!isUsableBlueprint(plan)) {
         createPlanForTicket(ticket);
         return;
       }
@@ -2606,14 +2611,16 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
           : `<span class="inbox-tag nobind">no workspace</span>`;
         const labels = (item.labels || []).slice(0, 3).map((l) => `<span class="inbox-tag">${escapeHtml(l)}</span>`).join("");
         const blueprint = item.blueprint;
+        const usableBlueprint = isUsableBlueprint(blueprint);
         const expanded = String(item.id) === String(expandedTicketId);
         const blueprintTags = item.kind === "issue"
-          ? blueprint
+          ? usableBlueprint
             ? blueprint.outcome === "needs_info"
               ? `<span class="inbox-tag nobind">needs info</span>`
               : `
                 <span class="inbox-tag bind">${escapeHtml(blueprint.size || "M")}</span>
                 <span class="inbox-tag">${escapeHtml(String(listCount(blueprint.files || blueprint.likelyFiles)))} files</span>
+                ${blueprint.stale ? `<span class="inbox-tag nobind">stale</span>` : ""}
                 ${(blueprint.riskAreas || []).slice(0, 2).map((risk) => `<span class="inbox-tag nobind">${escapeHtml(risk)}</span>`).join("")}
               `
             : `<span class="inbox-tag">blueprint on tap</span>`
