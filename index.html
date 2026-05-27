@@ -1214,6 +1214,16 @@
       return fetch(url, { ...options, headers });
     }
 
+    async function readApiJson(response, fallbackMessage = "Request failed") {
+      const text = await response.text();
+      if (!text) return {};
+      try {
+        return JSON.parse(text);
+      } catch {
+        return { ok: false, error: text.trim() || fallbackMessage };
+      }
+    }
+
     function authedApiUrl(path) {
       const url = new URL(path, window.location.origin);
       if (state.authToken) url.searchParams.set("token", state.authToken);
@@ -2194,12 +2204,24 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
       $("#planView").hidden = false;
       renderPlan();
       try {
-        const response = await apiFetch("/api/blueprints/create", {
+        const requestBody = JSON.stringify({ ticket, workspaceId: ticket.binding?.workspaceId || state.workspaceId, harness: state.harnessId });
+        let response = await apiFetch("/api/blueprints/create", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ ticket, workspaceId: ticket.binding?.workspaceId || state.workspaceId, harness: state.harnessId })
+          body: requestBody
         });
-        const data = await response.json();
+        let data = await readApiJson(response, "Could not create Blueprint");
+        if (response.status === 404) {
+          response = await apiFetch("/api/plans/create", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: requestBody
+          });
+          data = await readApiJson(response, "Could not create plan");
+          if (!response.ok || !data.ok) {
+            throw new Error("This Loupe daemon is still running an older build. Restart it on the Mac and refresh this page.");
+          }
+        }
         if (!response.ok || !data.ok) throw new Error(data.error || "Could not create Blueprint");
         state.plan = { loading: false, ticket, plan: data.blueprint || data.plan, error: null };
       } catch (error) {
