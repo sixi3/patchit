@@ -151,6 +151,35 @@
       scrollbar-width: thin;
     }
 
+    .session-list-toggle {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border: 1px solid var(--line-hot);
+      border-radius: 999px;
+      background: var(--panel-2);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .session-list-toggle .count {
+      min-width: 17px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      background: var(--yellow);
+      color: #101216;
+      text-align: center;
+      font-weight: 700;
+    }
+
+    .session-list-toggle.empty .count {
+      background: var(--line);
+      color: var(--muted);
+    }
+
     .session-card {
       min-width: min(320px, calc(100vw - 28px));
       border: 1px solid var(--line);
@@ -176,6 +205,7 @@
     }
 
     .session-title {
+      min-width: 0;
       font-size: 13px;
       line-height: 1.25;
       font-weight: 760;
@@ -195,6 +225,7 @@
     }
 
     .status-chip {
+      flex: 0 0 auto;
       color: var(--muted);
       border: 1px solid var(--line);
       border-radius: 999px;
@@ -530,6 +561,7 @@
     }
 
     .session-view,
+    .session-list-view,
     .inbox-view {
       position: fixed;
       inset: 0;
@@ -576,6 +608,34 @@
       align-content: start;
       gap: 10px;
       scrollbar-width: thin;
+    }
+
+    .session-list-body {
+      min-height: 0;
+      overflow-y: auto;
+      padding: 14px;
+      display: grid;
+      align-content: start;
+      gap: 10px;
+      scrollbar-width: thin;
+    }
+
+    .session-list-card {
+      width: 100%;
+      min-width: 0;
+      display: grid;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--text);
+      padding: 12px;
+      text-align: left;
+    }
+
+    .session-list-card.active {
+      border-color: rgba(242, 204, 96, 0.42);
+      background: #14120b;
     }
 
     .inbox-section {
@@ -896,9 +956,45 @@
         overflow: hidden;
         box-shadow: var(--shadow);
       }
+
+      .session-list-view {
+        inset: 28px calc((100vw - min(960px, 100%)) / 2);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: var(--shadow);
+      }
     }
 
     @media (max-width: 520px) {
+      .topbar {
+        padding: 10px 10px 8px;
+      }
+
+      .topbar > .bar-row {
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+
+      .top-actions {
+        width: 100%;
+        justify-content: space-between;
+      }
+
+      .session-list-toggle {
+        display: inline-flex;
+      }
+
+      .session-strip {
+        display: none;
+      }
+
+      .home {
+        align-items: start;
+        overflow-y: auto;
+        padding: 18px 12px;
+      }
+
       .hero h2 {
         font-size: 38px;
       }
@@ -937,9 +1033,12 @@
             <p class="subtitle">local agent bridge</p>
           </div>
         </div>
-        <div class="bar-row" style="gap: 8px;">
+        <div class="bar-row top-actions" style="gap: 8px;">
           <button type="button" class="inbox-toggle empty" id="inboxToggle" aria-label="Inbox">
             <span>inbox</span><span class="count" id="inboxCount">0</span>
+          </button>
+          <button type="button" class="session-list-toggle empty" id="sessionListToggle" aria-label="Sessions">
+            <span>sessions</span><span class="count" id="sessionListCount">0</span>
           </button>
           <div class="pill" id="daemonPill"><span class="dot"></span><span id="daemonPillText">checking</span></div>
         </div>
@@ -1012,6 +1111,20 @@
       </div>
     </header>
     <main class="session-body" id="sessionBody"></main>
+  </section>
+
+  <section class="session-list-view" id="sessionListView" hidden>
+    <header class="session-header">
+      <div class="session-header-top">
+        <button class="back-btn" id="closeSessionList" type="button">back</button>
+        <div class="session-heading">
+          <h2>Sessions</h2>
+          <p class="session-meta" id="sessionListSubtitle">No sessions yet</p>
+        </div>
+        <span class="status-chip" id="sessionListStatus">0</span>
+      </div>
+    </header>
+    <main class="session-list-body" id="sessionListBody"></main>
   </section>
 
   <section class="inbox-view" id="inboxView" hidden>
@@ -1238,8 +1351,14 @@
 
     function renderSessions() {
       const strip = $("#sessionStrip");
+      const toggle = $("#sessionListToggle");
+      const count = $("#sessionListCount");
+      const total = state.sessions.length;
+      count.textContent = total;
+      toggle.classList.toggle("empty", total === 0);
       if (!state.sessions.length) {
         strip.innerHTML = "";
+        renderSessionList();
         return;
       }
 
@@ -1252,11 +1371,40 @@
           <div class="session-meta">${escapeHtml(session.harnessLabel || session.harnessId || "agent")} · ${escapeHtml(session.workspace?.name || "workspace")} · ${session.messages.length} msg · ${session.files.length} files · ${session.actions.length} actions</div>
         </button>
       `).join("");
+      renderSessionList();
+    }
+
+    function renderSessionList() {
+      const body = $("#sessionListBody");
+      const subtitle = $("#sessionListSubtitle");
+      const status = $("#sessionListStatus");
+      const total = state.sessions.length;
+      status.textContent = String(total);
+      subtitle.textContent = total ? `${total} session${total === 1 ? "" : "s"}` : "No sessions yet";
+      body.innerHTML = total ? state.sessions.map((session) => `
+        <button class="session-list-card ${session.localId === state.activeSessionId || session.remoteId === state.activeSessionId ? "active" : ""}" type="button" data-session-id="${escapeHtml(session.localId)}">
+          <div class="session-card-top">
+            <div class="session-title">${escapeHtml(session.title)}</div>
+            <span class="status-chip ${escapeHtml(session.status)}">${escapeHtml(session.status)}</span>
+          </div>
+          <div class="session-meta">${escapeHtml(session.harnessLabel || session.harnessId || "agent")} · ${escapeHtml(session.workspace?.name || "workspace")} · ${session.messages.length} msg · ${session.files.length} files · ${session.actions.length} actions</div>
+        </button>
+      `).join("") : `<div class="empty">No sessions yet.</div>`;
+    }
+
+    function openSessionList() {
+      $("#sessionListView").hidden = false;
+      renderSessionList();
+    }
+
+    function closeSessionList() {
+      $("#sessionListView").hidden = true;
     }
 
     function openSession(sessionId) {
       state.activeSessionId = sessionId;
       state.activeSessionTab = "messages";
+      $("#sessionListView").hidden = true;
       $("#sessionView").hidden = false;
       renderSessions();
       renderSessionView();
@@ -1783,6 +1931,13 @@
     });
 
     $("#sessionStrip").addEventListener("click", (event) => {
+      const card = event.target.closest("[data-session-id]");
+      if (card) openSession(card.dataset.sessionId);
+    });
+
+    $("#sessionListToggle").addEventListener("click", openSessionList);
+    $("#closeSessionList").addEventListener("click", closeSessionList);
+    $("#sessionListBody").addEventListener("click", (event) => {
       const card = event.target.closest("[data-session-id]");
       if (card) openSession(card.dataset.sessionId);
     });
