@@ -666,6 +666,11 @@
       font: inherit;
     }
 
+    .inbox-card.expanded {
+      border-color: rgba(242, 204, 96, 0.42);
+      background: #14120b;
+    }
+
     .inbox-card:hover { border-color: var(--line-hot); }
     .inbox-card[disabled] { opacity: 0.55; cursor: not-allowed; }
 
@@ -712,6 +717,75 @@
     .inbox-tag.nobind { color: var(--red); border-color: rgba(255, 123, 114, 0.35); }
     .inbox-tag.review { color: var(--blue); border-color: rgba(121, 192, 255, 0.35); }
     .inbox-tag.issue { color: var(--yellow); border-color: rgba(242, 204, 96, 0.35); }
+
+    .blueprint-drawer {
+      display: grid;
+      gap: 9px;
+      margin-top: 4px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+    }
+
+    .blueprint-summary {
+      color: #dfe5ed;
+      font-size: 13px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .blueprint-sections {
+      display: grid;
+      gap: 7px;
+    }
+
+    .blueprint-section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.02);
+      overflow: hidden;
+    }
+
+    .blueprint-section summary {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 34px;
+      padding: 9px 10px;
+      cursor: pointer;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 11px;
+      list-style: none;
+    }
+
+    .blueprint-section summary::-webkit-details-marker { display: none; }
+
+    .blueprint-section summary::after {
+      content: "+";
+      color: var(--muted);
+    }
+
+    .blueprint-section[open] summary::after { content: "-"; }
+
+    .blueprint-section ul {
+      margin: 0;
+      padding: 0 10px 10px 24px;
+      color: #dfe5ed;
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .blueprint-action-row {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .blueprint-action-row .mini-btn {
+      min-height: 34px;
+    }
 
     .inbox-connect {
       border: 1px dashed var(--line-hot);
@@ -1202,7 +1276,7 @@
       fsPath: null,
       fsListing: null,
       githubOAuth: { loading: false, flowId: null, userCode: null, verificationUri: null, interval: 5, error: null, timer: null },
-      inbox: { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null },
+      inbox: { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null, expandedTicketId: null },
       plan: { loading: false, ticket: null, plan: null, error: null }
     };
 
@@ -2044,6 +2118,10 @@
 
     function closePlan() { $("#planView").hidden = true; }
 
+    function listCount(items) {
+      return Array.isArray(items) ? items.length : 0;
+    }
+
     function planList(title, items, emptyText) {
       const list = (items || []).length
         ? items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
@@ -2252,7 +2330,7 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
         const response = await apiFetch(url, { cache: "no-store" });
         const data = await response.json();
         if (response.status === 400 && /token|not connected/i.test(data.error || "")) {
-          state.inbox = { ...state.inbox, loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null };
+          state.inbox = { ...state.inbox, loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null, expandedTicketId: null };
           renderInbox(); renderInboxBadge();
           return;
         }
@@ -2264,7 +2342,8 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
           assigned: data.assigned || [],
           reviews: data.reviews || [],
           error: null,
-          fetchedAt: data.fetchedAt
+          fetchedAt: data.fetchedAt,
+          expandedTicketId: state.inbox.expandedTicketId
         };
       } catch (error) {
         state.inbox.loading = false;
@@ -2355,7 +2434,7 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
         if (!response.ok || !data.ok) throw new Error(data.error || "Could not disconnect GitHub");
         clearGithubOAuthTimer();
         state.githubOAuth = { loading: false, flowId: null, userCode: null, verificationUri: null, interval: 5, error: null, timer: null };
-        state.inbox = { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null };
+        state.inbox = { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null, expandedTicketId: null };
         renderInbox(); renderInboxBadge();
         toast("GitHub disconnected.");
       } catch (error) {
@@ -2374,10 +2453,105 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
       createPlanForTicket(ticket);
     }
 
+    function blueprintFileLabel(file) {
+      if (typeof file === "string") return file;
+      return `${file.path || "unknown"}${file.is_new ? " (new)" : ""}${file.why ? ` - ${file.why}` : ""}`;
+    }
+
+    function blueprintDepLabel(dep) {
+      if (typeof dep === "string") return dep;
+      return `${dep.name || "dependency"}${dep.ecosystem ? ` (${dep.ecosystem})` : ""}${dep.reason ? ` - ${dep.reason}` : ""}`;
+    }
+
+    function blueprintMigrationLabel(migration) {
+      if (typeof migration === "string") return migration;
+      return `${migration.kind || "schema"} / ${migration.risk || "medium"}${migration.purpose ? ` - ${migration.purpose}` : ""}`;
+    }
+
+    function blueprintSection(title, items, formatter, emptyText, open = false) {
+      const normalized = (items || []).map(formatter).filter(Boolean);
+      const list = normalized.length
+        ? normalized.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
+        : `<li>${escapeHtml(emptyText)}</li>`;
+      return `
+        <details class="blueprint-section" ${open ? "open" : ""}>
+          <summary><span>${escapeHtml(title)}</span><span>${normalized.length || 0}</span></summary>
+          <ul>${list}</ul>
+        </details>
+      `;
+    }
+
+    function renderBlueprintDrawer(ticket) {
+      const blueprint = ticket.blueprint;
+      if (!blueprint) {
+        return `
+          <div class="blueprint-drawer">
+            <div class="inbox-card-meta">
+              <span class="inbox-tag">blueprint on tap</span>
+            </div>
+            <div class="blueprint-summary">No cached Blueprint is available for this ticket yet.</div>
+            <div class="blueprint-action-row">
+              <button type="button" class="mini-btn primary" data-inbox-action="build">build Blueprint</button>
+            </div>
+          </div>
+        `;
+      }
+
+      const blocked = blueprint.outcome === "needs_info";
+      const files = blueprint.files || blueprint.likelyFiles || [];
+      const riskAreas = blueprint.riskAreas || blueprint.risks || [];
+      return `
+        <div class="blueprint-drawer">
+          <div class="inbox-card-meta">
+            <span class="inbox-tag ${blocked ? "nobind" : "bind"}">${blocked ? "needs info" : "ready"}</span>
+            <span class="inbox-tag">${escapeHtml(blueprint.size || "M")}</span>
+            ${blueprint.cached ? `<span class="inbox-tag">cached</span>` : ""}
+          </div>
+          <div class="blueprint-summary">${escapeHtml(blueprint.summary || (blocked ? "Ticket needs clarification before dispatch." : "Blueprint is ready for review."))}</div>
+          <div class="blueprint-sections">
+            ${blocked ? blueprintSection("missing info", blueprint.missingInfo, (item) => item, "No specific gaps returned.", true) : ""}
+            ${blueprintSection("predicted files", files, blueprintFileLabel, "No specific files predicted.", !blocked)}
+            ${blueprintSection("risk areas", riskAreas, (item) => item, "No risk areas surfaced.")}
+            ${blueprintSection("dependencies", blueprint.deps, blueprintDepLabel, "No new dependencies predicted.")}
+            ${blueprintSection("migrations", blueprint.migrations, blueprintMigrationLabel, "No migrations predicted.")}
+            ${blueprintSection("open questions", blueprint.openQuestions, (item) => item, "No open questions.")}
+          </div>
+          <div class="blueprint-action-row">
+            <button type="button" class="mini-btn primary" data-inbox-action="${blocked ? "blocked" : "dispatch"}" ${blocked ? "disabled" : ""}>${blocked ? "needs info" : "dispatch"}</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function previewTicket(ticket) {
+      if (ticket.kind === "review") {
+        dispatchTicket(ticket);
+        return;
+      }
+      const id = String(ticket.id);
+      state.inbox.expandedTicketId = state.inbox.expandedTicketId === id ? null : id;
+      renderInbox();
+    }
+
+    function dispatchBlueprintFromPreview(ticket) {
+      const plan = ticket.blueprint;
+      if (!plan) {
+        createPlanForTicket(ticket);
+        return;
+      }
+      if (plan.outcome === "needs_info") {
+        toast("This ticket needs more info before dispatch.");
+        return;
+      }
+      setDispatchContext(ticket, plan);
+      closeInbox();
+      startSession(ticketPrompt(ticket, plan));
+    }
+
     function renderInbox() {
       const subtitle = $("#inboxSubtitle");
       const body = $("#inboxBody");
-      const { loading, connected, viewer, assigned, reviews, error, fetchedAt } = state.inbox;
+      const { loading, connected, viewer, assigned, reviews, error, fetchedAt, expandedTicketId } = state.inbox;
 
       if (loading) {
         subtitle.textContent = "Loading...";
@@ -2432,19 +2606,20 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
           : `<span class="inbox-tag nobind">no workspace</span>`;
         const labels = (item.labels || []).slice(0, 3).map((l) => `<span class="inbox-tag">${escapeHtml(l)}</span>`).join("");
         const blueprint = item.blueprint;
-        const blueprintTags = item.kind === "issue" && blueprint
-          ? blueprint.outcome === "needs_info"
-            ? `<span class="inbox-tag nobind">needs info</span>`
-            : blueprint.status === "not_started"
-              ? `<span class="inbox-tag">blueprint on tap</span>`
+        const expanded = String(item.id) === String(expandedTicketId);
+        const blueprintTags = item.kind === "issue"
+          ? blueprint
+            ? blueprint.outcome === "needs_info"
+              ? `<span class="inbox-tag nobind">needs info</span>`
               : `
                 <span class="inbox-tag bind">${escapeHtml(blueprint.size || "M")}</span>
-                <span class="inbox-tag">${escapeHtml(String((blueprint.files || []).length))} files</span>
+                <span class="inbox-tag">${escapeHtml(String(listCount(blueprint.files || blueprint.likelyFiles)))} files</span>
                 ${(blueprint.riskAreas || []).slice(0, 2).map((risk) => `<span class="inbox-tag nobind">${escapeHtml(risk)}</span>`).join("")}
               `
+            : `<span class="inbox-tag">blueprint on tap</span>`
           : "";
         return `
-          <button class="inbox-card" type="button" data-ticket-id="${escapeHtml(String(item.id))}">
+          <article class="inbox-card${expanded ? " expanded" : ""}" role="${expanded && item.kind === "issue" ? "group" : "button"}" tabindex="0" data-ticket-id="${escapeHtml(String(item.id))}" aria-expanded="${expanded ? "true" : "false"}">
             <div class="inbox-card-top">
               <span>${escapeHtml(item.repo)}#${escapeHtml(String(item.number))}</span>
               <span>${escapeHtml(new Date(item.updatedAt).toLocaleString())}</span>
@@ -2456,7 +2631,8 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
               ${labels}
               ${blueprintTags}
             </div>
-          </button>
+            ${expanded && item.kind === "issue" ? renderBlueprintDrawer(item) : ""}
+          </article>
         `;
       };
 
@@ -2501,7 +2677,31 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
       if (!card) return;
       const id = card.dataset.ticketId;
       const ticket = [...state.inbox.assigned, ...state.inbox.reviews].find((t) => String(t.id) === id);
-      if (ticket) dispatchTicket(ticket);
+      if (!ticket) return;
+      const action = event.target.closest("[data-inbox-action]")?.dataset.inboxAction;
+      if (action === "build") {
+        createPlanForTicket(ticket);
+        return;
+      }
+      if (action === "dispatch") {
+        dispatchBlueprintFromPreview(ticket);
+        return;
+      }
+      if (action === "blocked") {
+        toast("This ticket needs more info before dispatch.");
+        return;
+      }
+      if (event.target.closest(".blueprint-drawer")) return;
+      previewTicket(ticket);
+    });
+    $("#inboxBody").addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const card = event.target.closest("[data-ticket-id]");
+      if (!card || event.target.closest(".blueprint-drawer")) return;
+      event.preventDefault();
+      const id = card.dataset.ticketId;
+      const ticket = [...state.inbox.assigned, ...state.inbox.reviews].find((t) => String(t.id) === id);
+      if (ticket) previewTicket(ticket);
     });
 
     if ("serviceWorker" in navigator) {
