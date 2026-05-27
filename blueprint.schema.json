@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loupe.dev/blueprint.schema.json",
+  "title": "Loupe Blueprint",
+  "description": "Pre-dispatch structured plan of what a coding agent would change to resolve a GitHub issue. Produced by any provider implementing the PlanningProvider interface.",
+  "type": "object",
+  "required": ["outcome"],
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "enum": ["ready", "needs_info"],
+      "description": "ready = blueprint produced, agent can be dispatched. needs_info = ticket missing prerequisites, dispatch blocked."
+    },
+
+    "missing_info": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Required when outcome=needs_info. Specific items the ticket needs before it can be planned."
+    },
+
+    "summary": {
+      "type": "string",
+      "description": "One-sentence summary of the proposed change.",
+      "maxLength": 280
+    },
+
+    "size": {
+      "type": "string",
+      "enum": ["S", "M", "L", "XL"],
+      "description": "Rough scope estimate: S=trivial, M=routine, L=multi-file, XL=cross-cutting"
+    },
+
+    "files": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "required": ["path", "is_new", "confidence", "why"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Repo-relative path. For new files, a provisional path the agent may rename."
+          },
+          "is_new": {
+            "type": "boolean",
+            "description": "True if this file does not currently exist."
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "why": {
+            "type": "string",
+            "description": "Reason this file is expected to change.",
+            "maxLength": 200
+          }
+        }
+      }
+    },
+
+    "deps": {
+      "type": "array",
+      "description": "New dependencies the change is likely to need. Only include after verifying the manifest does not already contain them.",
+      "items": {
+        "type": "object",
+        "required": ["name", "reason"],
+        "properties": {
+          "name": { "type": "string" },
+          "ecosystem": {
+            "type": "string",
+            "enum": ["npm", "pip", "cargo", "go", "gem", "maven", "other"]
+          },
+          "reason": { "type": "string", "maxLength": 200 }
+        }
+      }
+    },
+
+    "migrations": {
+      "type": "array",
+      "description": "Schema/data mutations the change is likely to need.",
+      "items": {
+        "type": "object",
+        "required": ["purpose", "risk"],
+        "properties": {
+          "purpose": { "type": "string", "maxLength": 200 },
+          "risk": { "type": "string", "enum": ["low", "medium", "high"] },
+          "kind": { "type": "string", "enum": ["schema", "data", "index"] }
+        }
+      }
+    },
+
+    "risk_areas": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "payments", "auth", "security", "migration", "ml-quality",
+          "concurrency", "data-loss", "performance", "infra", "observability"
+        ]
+      },
+      "description": "Standardized risk vocabulary. Empty array if no specific risk surface."
+    },
+
+    "out_of_scope": {
+      "type": "array",
+      "description": "Files the agent should explicitly NOT modify even if they seem related.",
+      "items": {
+        "type": "object",
+        "required": ["path", "reason"],
+        "properties": {
+          "path": { "type": "string" },
+          "reason": { "type": "string", "maxLength": 200 }
+        }
+      }
+    },
+
+    "open_questions": {
+      "type": "array",
+      "maxItems": 3,
+      "items": { "type": "string", "maxLength": 200 },
+      "description": "Decisions whose answers would meaningfully change the implementation. The user can resolve before dispatch."
+    },
+
+    "default_agent": {
+      "type": "string",
+      "enum": ["claude", "codex"],
+      "description": "Recommended harness for this ticket character."
+    },
+
+    "blueprint_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Honest belief the agent will succeed on first attempt without send-back. Below 0.5 = human should plan first."
+    }
+  }
+}
