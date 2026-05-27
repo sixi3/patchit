@@ -1,5 +1,6 @@
 const http = require("http");
 const https = require("https");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -17,14 +18,20 @@ const CLAUDE_HOME = process.env.CLAUDE_HOME || path.join(os.homedir(), ".claude"
 const CLAUDE_PROJECTS_DIR = path.join(CLAUDE_HOME, "projects");
 const LOUPE_HOME = process.env.LOUPE_HOME || path.join(os.homedir(), ".loupe");
 const CONFIG_FILE = path.join(LOUPE_HOME, "config.json");
+const STATE_FILE = path.join(LOUPE_HOME, "state.json");
+const GITHUB_OAUTH_CLIENT_ID = process.env.GITHUB_OAUTH_CLIENT_ID || "";
+const GITHUB_OAUTH_SCOPES = process.env.GITHUB_OAUTH_SCOPES || "repo read:user";
 
 const sessions = new Map();
+const plans = new Map();
 const recentRequests = [];
 const workspaces = getConfiguredWorkspaces();
 const harnessRegistry = buildHarnessRegistry();
 let config = loadConfig();
+ensureAlphaAuth();
 // Cache the GitHub inbox briefly so the PWA can re-render without hammering the API.
 const inboxCache = { fetchedAt: 0, ttlMs: 60_000, payload: null };
+const githubOAuthFlows = new Map();
 
 function findClaudeBin() {
   // 1. claude on PATH
@@ -101,11 +108,111 @@ function saveConfig() {
   try { fs.chmodSync(CONFIG_FILE, 0o600); } catch {}
 }
 
-function configSummary() {
+function serializeSession(session) {
   return {
+    id: session.id,
+    harnessId: session.harnessId,
+    message: session.message,
+    workspace: session.workspace,
+    dispatch: session.dispatch || null,
+    status: session.child ? "running" : session.status,
+    events: session.events || [],
+    nextEventId: session.nextEventId || 0,
+    startedAt: session.startedAt,
+    exitCode: session.exitCode ?? null,
+    codexThreadId: session.codexThreadId || null,
+    claudeSessionId: session.claudeSessionId || null,
+    branch: session.branch || null,
+    agentMessages: session.agentMessages || [],
+    handoff: session.handoff || null
+  };
+}
+
+function persistState() {
+  try {
+    fs.mkdirSync(LOUPE_HOME, { recursive: true });
+    const payload = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      sessions: [...sessions.values()].map(serializeSession).slice(-100),
+      plans: [...plans.values()].slice(-200)
+    };
+    const tmp = `${STATE_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2));
+    fs.renameSync(tmp, STATE_FILE);
+    try { fs.chmodSync(STATE_FILE, 0o600); } catch {}
+  } catch (error) {
+    console.warn(`Could not persist Loupe state: ${error.message}`);
+  }
+}
+
+function hydrateState() {
+  let payload = null;
+  try {
+    payload = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+  } catch {
+    return;
+  }
+
+  for (const plan of payload.plans || []) {
+    if (plan?.id) plans.set(plan.id, plan);
+  }
+
+  for (const saved of payload.sessions || []) {
+    if (!saved?.id) continue;
+    const events = Array.isArray(saved.events) ? saved.events : [];
+    const maxEventId = events.reduce((max, event) => Math.max(max, Number(event.id) || 0), -1);
+    sessions.set(saved.id, {
+      id: saved.id,
+      harnessId: saved.harnessId,
+      message: saved.message || "",
+      workspace: saved.workspace || null,
+      dispatch: saved.dispatch || null,
+      status: saved.status === "running" ? "interrupted" : saved.status || "completed",
+      events,
+      clients: new Set(),
+      nextEventId: Math.max(Number(saved.nextEventId) || 0, maxEventId + 1),
+      startedAt: saved.startedAt || new Date().toISOString(),
+      exitCode: saved.exitCode ?? null,
+      codexThreadId: saved.codexThreadId || null,
+      claudeSessionId: saved.claudeSessionId || null,
+      branch: saved.branch || null,
+      agentMessages: Array.isArray(saved.agentMessages) ? saved.agentMessages : [],
+      handoff: saved.handoff || null,
+      child: null
+    });
+  }
+}
+
+function createSecretToken() {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+function ensureAlphaAuth() {
+  if (!config.apiToken) {
+    config.apiToken = createSecretToken();
+    saveConfig();
+  }
+}
+
+function tokenPreview(token) {
+  if (!token) return null;
+  return `${token.slice(0, 6)}...${token.slice(-4)}`;
+}
+
+function configSummary() {
+  const githubAuth = config.github || {};
+  return {
+    auth: {
+      enabled: true,
+      tokenPreview: tokenPreview(config.apiToken)
+    },
     github: {
-      configured: !!config.githubToken,
-      login: config.githubLogin || null
+      configured: !!getGithubAccessToken(),
+      login: githubAuth.login || config.githubLogin || null,
+      avatarUrl: githubAuth.avatarUrl || null,
+      authType: githubAuth.accessToken ? "oauth" : config.githubToken ? "pat" : null,
+      oauthClientConfigured: !!GITHUB_OAUTH_CLIENT_ID
     }
   };
 }
@@ -144,22 +251,114 @@ function listWorkspaceBindings() {
     .filter(Boolean);
 }
 
+function workspaceReadiness(workspace) {
+  const blockers = [];
+  const warnings = [];
+  const pathExists = fs.existsSync(workspace.path);
+  let isGitRepo = false;
+  let branch = null;
+  let dirty = false;
+  let binding = null;
+
+  if (!pathExists) {
+    blockers.push("Workspace folder no longer exists.");
+  } else {
+    const inside = spawnSync("git", ["-C", workspace.path, "rev-parse", "--is-inside-work-tree"], { timeout: 1500, encoding: "utf8" });
+    isGitRepo = inside.status === 0 && inside.stdout.trim() === "true";
+    if (!isGitRepo) {
+      blockers.push("Workspace is not a git repository.");
+    } else {
+      binding = workspaceRepoBinding(workspace);
+      if (!binding) blockers.push("Workspace is not bound to a GitHub remote.");
+
+      const head = spawnSync("git", ["-C", workspace.path, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 1500, encoding: "utf8" });
+      if (head.status === 0) branch = head.stdout.trim();
+      else warnings.push("Could not read current branch.");
+
+      const status = spawnSync("git", ["-C", workspace.path, "status", "--porcelain"], { timeout: 2000, encoding: "utf8" });
+      if (status.status === 0) {
+        dirty = !!status.stdout.trim();
+        if (dirty) blockers.push("Workspace has uncommitted changes.");
+      } else {
+        blockers.push("Could not read git status.");
+      }
+    }
+  }
+
+  if (!getGithubAccessToken()) {
+    warnings.push("GitHub is not connected; Loupe can push with git credentials but cannot create draft PRs via API.");
+  }
+
+  return {
+    workspaceId: workspace.id,
+    workspacePath: workspace.path,
+    ready: blockers.length === 0,
+    canDispatch: blockers.length === 0,
+    pathExists,
+    isGitRepo,
+    branch,
+    dirty,
+    binding,
+    blockers,
+    warnings
+  };
+}
+
+function listWorkspaceReadiness() {
+  return workspaces.map(workspaceReadiness);
+}
+
 // ---------- GitHub API ----------
 // Minimal HTTPS-only client. Uses search/issues so we can scope to assignee:@me
 // across every repo the token can see in one call, then enriches with PR review
 // requests in a second call. Enough for the demo inbox.
 
+function getGithubAccessToken() {
+  return config.github?.accessToken || config.githubToken || "";
+}
+
+function saveGithubOAuth(tokenPayload, viewer) {
+  config.github = {
+    accessToken: tokenPayload.access_token,
+    tokenType: tokenPayload.token_type || "bearer",
+    scope: tokenPayload.scope || GITHUB_OAUTH_SCOPES,
+    login: viewer?.login || null,
+    avatarUrl: viewer?.avatar_url || null,
+    connectedAt: new Date().toISOString()
+  };
+  delete config.githubToken;
+  delete config.githubLogin;
+  saveConfig();
+  inboxCache.fetchedAt = 0;
+  inboxCache.payload = null;
+}
+
+function clearGithubAuth() {
+  delete config.github;
+  delete config.githubToken;
+  delete config.githubLogin;
+  saveConfig();
+  inboxCache.fetchedAt = 0;
+  inboxCache.payload = null;
+}
+
 function githubRequest(pathname, token) {
+  return githubApiRequest("GET", pathname, token);
+}
+
+function githubApiRequest(method, pathname, token, payload = null) {
+  const body = payload ? JSON.stringify(payload) : "";
   return new Promise((resolve, reject) => {
     const req = https.request({
       hostname: "api.github.com",
       path: pathname,
-      method: "GET",
+      method,
       headers: {
         "user-agent": "loupe-mac-daemon",
         accept: "application/vnd.github+json",
         "x-github-api-version": "2022-11-28",
-        authorization: `Bearer ${token}`
+        authorization: `Bearer ${token}`,
+        ...(body ? { "content-type": "application/json", "content-length": Buffer.byteLength(body) } : {})
       }
     }, (res) => {
       let body = "";
@@ -176,8 +375,55 @@ function githubRequest(pathname, token) {
     });
     req.on("error", reject);
     req.setTimeout(15_000, () => req.destroy(new Error("GitHub request timeout")));
+    if (body) req.write(body);
     req.end();
   });
+}
+
+function githubOAuthPost(pathname, params) {
+  const body = new URLSearchParams(params).toString();
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: "github.com",
+      path: pathname,
+      method: "POST",
+      headers: {
+        "user-agent": "loupe-mac-daemon",
+        accept: "application/json",
+        "content-type": "application/x-www-form-urlencoded",
+        "content-length": Buffer.byteLength(body)
+      }
+    }, (res) => {
+      let responseBody = "";
+      res.on("data", (chunk) => { responseBody += chunk; });
+      res.on("end", () => {
+        let parsed = {};
+        try { parsed = JSON.parse(responseBody); } catch {
+          const query = new URLSearchParams(responseBody);
+          parsed = Object.fromEntries(query.entries());
+        }
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(parsed);
+        } else {
+          const err = new Error(parsed.error_description || parsed.error || `GitHub OAuth ${res.statusCode}`);
+          err.statusCode = res.statusCode;
+          err.payload = parsed;
+          reject(err);
+        }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(15_000, () => req.destroy(new Error("GitHub OAuth request timeout")));
+    req.write(body);
+    req.end();
+  });
+}
+
+function cleanupGithubOAuthFlows() {
+  const now = Date.now();
+  for (const [id, flow] of githubOAuthFlows) {
+    if (flow.expiresAt <= now) githubOAuthFlows.delete(id);
+  }
 }
 
 async function fetchGithubInbox(token) {
@@ -189,7 +435,11 @@ async function fetchGithubInbox(token) {
   ]);
 
   // Persist login on first fetch so we can show it in config summary.
-  if (viewer?.login && config.githubLogin !== viewer.login) {
+  if (viewer?.login && config.github?.accessToken && config.github.login !== viewer.login) {
+    config.github.login = viewer.login;
+    config.github.avatarUrl = viewer.avatar_url || config.github.avatarUrl || null;
+    saveConfig();
+  } else if (viewer?.login && config.githubLogin !== viewer.login) {
     config.githubLogin = viewer.login;
     saveConfig();
   }
@@ -255,6 +505,10 @@ function getNetworkUrls() {
   }
 
   return urls;
+}
+
+function getPairingUrls() {
+  return getNetworkUrls().map((url) => `${url}?pair=${encodeURIComponent(config.apiToken)}`);
 }
 
 function getConfiguredWorkspaces() {
@@ -441,6 +695,30 @@ function sendJson(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function isPublicApi(pathname) {
+  return pathname === "/api/pairing/status";
+}
+
+function requestAuthToken(req, url) {
+  const headerToken = req.headers["x-loupe-token"];
+  if (typeof headerToken === "string" && headerToken.trim()) return headerToken.trim();
+
+  const auth = req.headers.authorization;
+  if (typeof auth === "string" && auth.toLowerCase().startsWith("bearer ")) {
+    return auth.slice(7).trim();
+  }
+
+  // EventSource cannot set custom headers in browsers, so the SSE endpoint
+  // accepts the same token as a query param.
+  const queryToken = url.searchParams.get("token");
+  return queryToken ? queryToken.trim() : "";
+}
+
+function isAuthorized(req, url) {
+  const token = requestAuthToken(req, url);
+  return !!config.apiToken && token === config.apiToken;
+}
+
 function getClientIp(req) {
   const forwarded = req.headers["x-forwarded-for"];
   if (forwarded) return forwarded.split(",")[0].trim();
@@ -478,6 +756,7 @@ function readBody(req) {
 function addEvent(session, event) {
   const enriched = { id: session.nextEventId++, at: new Date().toISOString(), ...event };
   session.events.push(enriched);
+  persistState();
   for (const res of session.clients) {
     res.write(`data: ${JSON.stringify(enriched)}\n\n`);
   }
@@ -535,6 +814,14 @@ function createSession(message, workspaceId, requestedHarness, dispatch) {
   if (!harness?.available) {
     throw new Error(`Harness "${harnessId}" is not available on this Mac. Install Codex or Claude Code.`);
   }
+  if (dispatch?.mode === "branch") {
+    const readiness = workspaceReadiness(workspace);
+    if (!readiness.canDispatch) {
+      const error = new Error(`Workspace is not ready for ticket dispatch: ${readiness.blockers.join(" ")}`);
+      error.statusCode = 409;
+      throw error;
+    }
+  }
 
   const id = `${harnessId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const session = {
@@ -551,9 +838,12 @@ function createSession(message, workspaceId, requestedHarness, dispatch) {
     exitCode: null,
     codexThreadId: null,
     claudeSessionId: null,
-    branch: null // populated by setupBranchIfApplicable when branch mode triggers
+    branch: null, // populated by setupBranchIfApplicable when branch mode triggers
+    agentMessages: [],
+    handoff: null
   };
   sessions.set(id, session);
+  addEvent(session, { type: "user_message", text: message });
 
   // Auto-engage branch mode when the workspace is bound to a GitHub repo,
   // unless the caller explicitly opted out with dispatch.mode = "plain".
@@ -586,8 +876,288 @@ function continueSession(id, message) {
     throw new Error("Claude Code has not reported a resumable session ID yet.");
   }
 
+  addEvent(session, { type: "user_message", text: message });
   spawnSessionTurn(session, message, { resume: true });
   return session;
+}
+
+function toStringList(value, limit = 12) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (typeof item === "string") return item.trim();
+      if (item && typeof item === "object") {
+        return [item.file, item.path, item.change, item.summary, item.command, item.concern, item.risk, item.assumption]
+          .filter(Boolean)
+          .join(" — ")
+          .trim();
+      }
+      return String(item || "").trim();
+    })
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function normalizeHandoff(raw, { session, changedFiles = [] } = {}) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const plan = session?.dispatch?.plan || {};
+  const confidence = Math.max(0, Math.min(1, Number(source.confidence?.overall ?? source.confidence ?? 0.5) || 0.5));
+  return {
+    tldr: String(source.tldr || source.summary || source.tl_dr || "Agent completed the requested change.").trim(),
+    what_changed: toStringList(source.what_changed || source.whatChanged || source.what_i_did || source.changes, 16),
+    files_changed: toStringList(source.files_changed || source.filesChanged || source.files || changedFiles, 40),
+    tests_run: toStringList(source.tests_run || source.testsRun || source.test_plan?.ran || source.tests, 16),
+    tests_not_run: toStringList(source.tests_not_run || source.testsNotRun || source.test_plan?.did_not_run, 16),
+    assumptions: toStringList(source.assumptions || source.verify_these || source.verifyThese || plan.openQuestions, 16),
+    risks: toStringList(source.risks || source.low_confidence_areas || source.confidence?.low_confidence_areas || plan.risks, 16),
+    confidence
+  };
+}
+
+function tryExtractHandoff(text, session) {
+  if (!text || !/handoff|tldr|what_changed|files_changed|tests_run/i.test(text)) return null;
+  try {
+    return normalizeHandoff(extractJsonObject(text), { session });
+  } catch {
+    return null;
+  }
+}
+
+function noteAgentMessage(session, text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return;
+  if (session.agentMessages.at(-1) === trimmed) return;
+  session.agentMessages.push(trimmed);
+  const handoff = tryExtractHandoff(trimmed, session);
+  if (handoff) {
+    session.handoff = handoff;
+    addEvent(session, { type: "handoff", kind: "captured", handoff });
+  }
+}
+
+function changedFilesFromCachedDiff(cwd) {
+  const result = gitRun(cwd, ["diff", "--cached", "--name-status"]);
+  if (result.status !== 0) return [];
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim().split(/\s+/).slice(-1)[0])
+    .filter(Boolean);
+}
+
+function buildSessionHandoff(session, changedFiles) {
+  const fallback = normalizeHandoff({
+    tldr: session.handoff?.tldr || session.dispatch?.plan?.summary || session.agentMessages.at(-1) || "Agent completed the requested change.",
+    what_changed: session.handoff?.what_changed?.length ? session.handoff.what_changed : [session.agentMessages.at(-1)].filter(Boolean),
+    files_changed: changedFiles,
+    tests_run: session.handoff?.tests_run || [],
+    tests_not_run: session.handoff?.tests_not_run || ["Not reported by agent."],
+    assumptions: session.handoff?.assumptions || session.dispatch?.plan?.openQuestions || [],
+    risks: session.handoff?.risks || session.dispatch?.plan?.risks || [],
+    confidence: session.handoff?.confidence ?? 0.5
+  }, { session, changedFiles });
+  session.handoff = fallback;
+  return fallback;
+}
+
+function markdownList(items, empty = "_None reported._") {
+  return items?.length ? items.map((item) => `- ${item}`).join("\n") : empty;
+}
+
+function formatPrBody(session, handoff, { branch, base, commitSha }) {
+  const ticket = session.dispatch?.ticket;
+  const plan = session.dispatch?.plan;
+  return `## What I did
+${handoff.tldr}
+
+## Why
+${ticket?.url ? `Refs ${ticket.url}` : "Requested from Loupe."}
+
+## Approach
+${plan?.summary || "No approved plan summary was recorded."}
+
+## Files changed (${handoff.files_changed.length})
+${markdownList(handoff.files_changed)}
+
+## I want you to double-check
+${markdownList([...handoff.assumptions, ...handoff.risks])}
+
+## Verified
+${markdownList(handoff.tests_run)}
+
+## Not verified
+${markdownList(handoff.tests_not_run)}
+
+## Confidence
+${Math.round(handoff.confidence * 100)}%
+
+---
+Generated by Loupe via ${session.harnessId}.
+
+- Branch: \`${branch}\`
+- Base: \`${base}\`
+- Commit: \`${commitSha}\`
+- Session: \`${session.id}\`
+`;
+}
+
+function buildPlanPrompt(ticket, workspace) {
+  const labels = Array.isArray(ticket.labels) && ticket.labels.length ? ticket.labels.join(", ") : "none";
+  return `
+You are planning a coding-agent task for Loupe. Do not edit files. Inspect the repository only enough to produce a concise implementation plan.
+
+Return ONLY valid JSON with this exact shape:
+{
+  "summary": "one sentence",
+  "likelyFiles": ["path/or/glob"],
+  "risks": ["risk or assumption"],
+  "tests": ["test command or test file"],
+  "openQuestions": ["question"],
+  "confidence": 0.0
+}
+
+Ticket:
+- Repo: ${ticket.repo || "unknown"}
+- Number: ${ticket.number || "unknown"}
+- Title: ${ticket.title || "Untitled"}
+- URL: ${ticket.url || "unknown"}
+- Labels: ${labels}
+
+Body:
+${ticket.body || "(no body provided)"}
+
+Workspace: ${workspace.path}
+`.trim();
+}
+
+function normalizePlan(raw, ticket, workspace, harnessId) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const list = (value) => Array.isArray(value)
+    ? value.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 12)
+    : [];
+  const confidence = Math.max(0, Math.min(1, Number(source.confidence) || 0.5));
+  return {
+    id: `plan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: new Date().toISOString(),
+    harness: harnessId,
+    workspace,
+    ticket,
+    summary: String(source.summary || `Plan for ${ticket.repo || "repo"}#${ticket.number || "ticket"}`).trim(),
+    likelyFiles: list(source.likelyFiles || source.likely_files || source.files),
+    risks: list(source.risks),
+    tests: list(source.tests || source.testPlan || source.test_plan),
+    openQuestions: list(source.openQuestions || source.open_questions || source.questions),
+    confidence
+  };
+}
+
+function extractJsonObject(text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) throw new Error("Plan runner returned no output.");
+  try {
+    return JSON.parse(trimmed);
+  } catch {}
+
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) {
+    try { return JSON.parse(fenced[1].trim()); } catch {}
+  }
+
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    return JSON.parse(trimmed.slice(start, end + 1));
+  }
+  throw new Error("Plan runner did not return parseable JSON.");
+}
+
+function runCapture(command, args, cwd, { timeout = 180_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("Plan generation timed out."));
+    }, timeout);
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve({ stdout, stderr });
+      } else {
+        reject(new Error((stderr || stdout || `${command} exited with code ${code}`).trim().slice(0, 1200)));
+      }
+    });
+  });
+}
+
+function parseCodexPlanOutput(stdout) {
+  let lastAgentMessage = "";
+  for (const line of String(stdout || "").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const payload = JSON.parse(line);
+      const item = payload.item;
+      if (item?.type === "agent_message" && item.text) lastAgentMessage = item.text;
+    } catch {}
+  }
+  return extractJsonObject(lastAgentMessage || stdout);
+}
+
+function parseClaudePlanOutput(stdout) {
+  const parsed = JSON.parse(stdout);
+  return extractJsonObject(parsed.result || parsed.response || parsed.content || stdout);
+}
+
+async function createPlan(ticket, workspaceId, requestedHarness) {
+  const workspace = resolveWorkspace(workspaceId);
+  const harnessId = (requestedHarness && getHarness(requestedHarness)?.available)
+    ? requestedHarness
+    : defaultHarnessId();
+  const harness = getHarness(harnessId);
+  if (!harness?.available) {
+    throw new Error(`Harness "${harnessId}" is not available on this Mac. Install Codex or Claude Code.`);
+  }
+  const prompt = buildPlanPrompt(ticket, workspace);
+  const cwd = workspace.path;
+
+  if (harnessId === "claude-code") {
+    const args = [
+      "-p", prompt,
+      "--output-format", "json",
+      "--permission-mode", "plan",
+      "--allowedTools", "Read,Glob,Grep",
+      "--add-dir", workspace.path
+    ];
+    const { stdout } = await runCapture(CLAUDE_BIN, args, cwd);
+    const plan = normalizePlan(parseClaudePlanOutput(stdout), ticket, workspace, harnessId);
+    plans.set(plan.id, plan);
+    persistState();
+    return plan;
+  }
+
+  const args = [
+    "exec",
+    "--json",
+    "--sandbox", "read-only",
+    "--skip-git-repo-check",
+    "-C", workspace.path,
+    prompt
+  ];
+  const { stdout } = await runCapture(CODEX_BIN, args, cwd);
+  const plan = normalizePlan(parseCodexPlanOutput(stdout), ticket, workspace, harnessId);
+  plans.set(plan.id, plan);
+  persistState();
+  return plan;
 }
 
 // ---------- Git branch / PR loop ----------
@@ -679,6 +1249,9 @@ async function finalizeBranch(session) {
     gitRun(cwd, ["branch", "-D", branch]);
     return;
   }
+  const changedFiles = changedFilesFromCachedDiff(cwd);
+  const handoff = buildSessionHandoff(session, changedFiles);
+  addEvent(session, { type: "handoff", kind: "ready", handoff });
 
   // 3. Commit. Subject line from the ticket / first message line.
   const subject = (session.dispatch?.ticket?.title || session.message.split(/\r?\n/)[0] || "Loupe agent change").slice(0, 72);
@@ -704,8 +1277,34 @@ async function finalizeBranch(session) {
     return;
   }
 
-  // 5. Build the compare URL — opens GitHub's "Open a pull request" page on web/mobile.
+  const finalPrBody = formatPrBody(session, handoff, { branch, base, commitSha });
+
+  // 5. Create a draft PR when GitHub auth is configured. If that fails, fall
+  // back to the compare URL so the user can still finish in GitHub Mobile.
   const compareUrl = `https://${binding.host}/${binding.owner}/${binding.repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?expand=1`;
+  let prUrl = null;
+  let prNumber = null;
+  let prError = null;
+  const token = getGithubAccessToken();
+  if (token && binding.host === "github.com") {
+    try {
+      const pr = await githubApiRequest("POST", `/repos/${encodeURIComponent(binding.owner)}/${encodeURIComponent(binding.repo)}/pulls`, token, {
+        title: `loupe: ${subject}`,
+        head: branch,
+        base,
+        body: finalPrBody,
+        draft: true
+      });
+      prUrl = pr.html_url;
+      prNumber = pr.number;
+    } catch (error) {
+      prError = error.message;
+      addEvent(session, { type: "branch", kind: "pr_failed", branch, text: `Could not create draft PR automatically. Use the compare URL instead.\n\n${prError}` });
+    }
+  } else if (!token) {
+    prError = "GitHub OAuth is not connected; created compare URL instead.";
+  }
+
   addEvent(session, {
     type: "branch",
     kind: "pr_ready",
@@ -713,8 +1312,13 @@ async function finalizeBranch(session) {
     base,
     repo: `${binding.owner}/${binding.repo}`,
     sha: commitSha,
+    prUrl,
+    prNumber,
     compareUrl,
-    text: `Pushed ${branch} to ${binding.owner}/${binding.repo}. Tap to open the PR draft.`
+    handoff,
+    text: prUrl
+      ? `Draft PR #${prNumber} is ready in ${binding.owner}/${binding.repo}.`
+      : `Pushed ${branch} to ${binding.owner}/${binding.repo}. Tap to open the PR draft.${prError ? ` ${prError}` : ""}`
   });
 }
 
@@ -722,9 +1326,13 @@ function spawnCodex(session, message, { resume = false } = {}) {
   const args = resume
     ? [
         "exec",
-        "resume",
         "--json",
+        "--sandbox",
+        "workspace-write",
         "--skip-git-repo-check",
+        "-C",
+        session.workspace.path,
+        "resume",
         session.codexThreadId,
         message
       ]
@@ -761,6 +1369,9 @@ function spawnCodex(session, message, { resume = false } = {}) {
         const payload = JSON.parse(line);
         if (payload.type === "thread.started" && payload.thread_id) {
           session.codexThreadId = payload.thread_id;
+        }
+        if (payload.item?.type === "agent_message" && payload.item.text) {
+          noteAgentMessage(session, payload.item.text);
         }
         addEvent(session, { type: "codex", payload });
       } catch {
@@ -819,6 +1430,7 @@ function spawnClaudeCode(session, message, { resume = false } = {}) {
 
   function flushDelta() {
     if (deltaState.text.trim()) {
+      noteAgentMessage(session, deltaState.text);
       addEvent(session, { type: "claude", kind: "message", text: deltaState.text, messageId: deltaState.messageId });
     }
     deltaState.text = "";
@@ -925,6 +1537,7 @@ function handleClaudeLine(session, payload, deltaState, flushDelta) {
         }
       } else if (block.type === "text" && block.text) {
         // Non-streaming text (rare with --include-partial-messages but possible)
+        noteAgentMessage(session, block.text);
         addEvent(session, { type: "claude", kind: "message", text: block.text });
       }
     }
@@ -955,6 +1568,7 @@ function handleClaudeLine(session, payload, deltaState, flushDelta) {
 
   if (payload.type === "result") {
     flushDelta();
+    if (payload.result) noteAgentMessage(session, payload.result);
     addEvent(session, {
       type: "claude",
       kind: "result",
@@ -1015,6 +1629,8 @@ function serveStatic(req, res) {
   });
 }
 
+hydrateState();
+
 const server = http.createServer(async (req, res) => {
   recordRequest(req);
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -1023,9 +1639,28 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204, {
       "access-control-allow-origin": "*",
       "access-control-allow-methods": "GET,POST,OPTIONS",
-      "access-control-allow-headers": "content-type"
+      "access-control-allow-headers": "content-type,x-loupe-token,authorization"
     });
     res.end();
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/") && !isPublicApi(url.pathname) && !isAuthorized(req, url)) {
+    sendJson(res, 401, {
+      ok: false,
+      authRequired: true,
+      error: "Loupe is not paired with this browser. Open the pairing URL printed by the Mac daemon."
+    });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/pairing/status") {
+    sendJson(res, 200, {
+      ok: true,
+      authRequired: true,
+      paired: isAuthorized(req, url),
+      tokenPreview: tokenPreview(config.apiToken)
+    });
     return;
   }
 
@@ -1042,6 +1677,7 @@ const server = http.createServer(async (req, res) => {
       urls: getNetworkUrls(),
       workspaces,
       workspaceBindings: listWorkspaceBindings(),
+      workspaceReadiness: listWorkspaceReadiness(),
       fsRoots: getFsRoots(),
       codexUsage: getCodexUsage(),
       claudeUsage: getClaudeUsage(),
@@ -1051,17 +1687,141 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && url.pathname === "/api/sessions") {
+    const serialized = [...sessions.values()]
+      .map(serializeSession)
+      .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")));
+    sendJson(res, 200, { ok: true, sessions: serialized });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/github/oauth/start") {
+    try {
+      if (!GITHUB_OAUTH_CLIENT_ID) {
+        sendJson(res, 400, {
+          ok: false,
+          error: "GitHub OAuth client ID is not configured. Start the daemon with GITHUB_OAUTH_CLIENT_ID."
+        });
+        return;
+      }
+      cleanupGithubOAuthFlows();
+      const payload = await githubOAuthPost("/login/device/code", {
+        client_id: GITHUB_OAUTH_CLIENT_ID,
+        scope: GITHUB_OAUTH_SCOPES
+      });
+      const flowId = createSecretToken();
+      const interval = Math.max(5, Number(payload.interval) || 5);
+      githubOAuthFlows.set(flowId, {
+        deviceCode: payload.device_code,
+        userCode: payload.user_code,
+        verificationUri: payload.verification_uri,
+        expiresAt: Date.now() + (Number(payload.expires_in) || 900) * 1000,
+        interval,
+        lastPollAt: 0
+      });
+      sendJson(res, 200, {
+        ok: true,
+        flowId,
+        userCode: payload.user_code,
+        verificationUri: payload.verification_uri,
+        expiresIn: Number(payload.expires_in) || 900,
+        interval,
+        scope: GITHUB_OAUTH_SCOPES
+      });
+    } catch (error) {
+      sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/github/oauth/poll") {
+    try {
+      const body = JSON.parse(await readBody(req) || "{}");
+      const flowId = String(body.flowId || "");
+      const flow = githubOAuthFlows.get(flowId);
+      if (!flow) {
+        sendJson(res, 404, { ok: false, status: "expired", error: "OAuth flow expired. Start GitHub connect again." });
+        return;
+      }
+      if (flow.expiresAt <= Date.now()) {
+        githubOAuthFlows.delete(flowId);
+        sendJson(res, 400, { ok: false, status: "expired", error: "GitHub code expired. Start GitHub connect again." });
+        return;
+      }
+      const elapsed = Date.now() - flow.lastPollAt;
+      if (flow.lastPollAt && elapsed < flow.interval * 1000) {
+        sendJson(res, 202, {
+          ok: false,
+          status: "waiting",
+          interval: flow.interval,
+          waitSeconds: Math.ceil((flow.interval * 1000 - elapsed) / 1000)
+        });
+        return;
+      }
+      flow.lastPollAt = Date.now();
+      const tokenPayload = await githubOAuthPost("/login/oauth/access_token", {
+        client_id: GITHUB_OAUTH_CLIENT_ID,
+        device_code: flow.deviceCode,
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code"
+      });
+
+      if (tokenPayload.error === "authorization_pending") {
+        sendJson(res, 202, { ok: false, status: "pending", interval: flow.interval });
+        return;
+      }
+      if (tokenPayload.error === "slow_down") {
+        flow.interval += 5;
+        sendJson(res, 202, { ok: false, status: "pending", interval: flow.interval });
+        return;
+      }
+      if (tokenPayload.error) {
+        githubOAuthFlows.delete(flowId);
+        sendJson(res, 400, { ok: false, status: tokenPayload.error, error: tokenPayload.error_description || tokenPayload.error });
+        return;
+      }
+      if (!tokenPayload.access_token) {
+        throw new Error("GitHub did not return an access token.");
+      }
+
+      const viewer = await githubRequest("/user", tokenPayload.access_token);
+      saveGithubOAuth(tokenPayload, viewer);
+      githubOAuthFlows.delete(flowId);
+      sendJson(res, 200, { ok: true, status: "authorized", login: viewer.login, config: configSummary() });
+    } catch (error) {
+      sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/github/disconnect") {
+    clearGithubAuth();
+    sendJson(res, 200, { ok: true, config: configSummary() });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/plans/create") {
+    try {
+      const body = JSON.parse(await readBody(req) || "{}");
+      const ticket = body.ticket || {};
+      if (!ticket.title && !ticket.body) {
+        sendJson(res, 400, { ok: false, error: "Ticket title or body is required to create a plan." });
+        return;
+      }
+      const plan = await createPlan(ticket, body.workspaceId, body.harness);
+      sendJson(res, 200, { ok: true, plan });
+    } catch (error) {
+      sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
+    }
+    return;
+  }
+
   if (req.method === "POST" && url.pathname === "/api/config/github") {
     try {
       const body = JSON.parse(await readBody(req) || "{}");
       const token = String(body.token || "").trim();
       if (!token) {
         // Clearing the token is allowed — null it out.
-        delete config.githubToken;
-        delete config.githubLogin;
-        saveConfig();
-        inboxCache.fetchedAt = 0;
-        inboxCache.payload = null;
+        clearGithubAuth();
         sendJson(res, 200, { ok: true, cleared: true, config: configSummary() });
         return;
       }
@@ -1081,8 +1841,9 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/api/github/inbox") {
     try {
-      if (!config.githubToken) {
-        sendJson(res, 400, { ok: false, error: "GitHub token not configured. POST a token to /api/config/github." });
+      const token = getGithubAccessToken();
+      if (!token) {
+        sendJson(res, 400, { ok: false, error: "GitHub is not connected. Connect GitHub with OAuth first." });
         return;
       }
       const force = url.searchParams.get("refresh") === "1";
@@ -1091,7 +1852,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 200, { ok: true, cached: true, ...inboxCache.payload });
         return;
       }
-      const payload = await fetchGithubInbox(config.githubToken);
+      const payload = await fetchGithubInbox(token);
       inboxCache.fetchedAt = Date.now();
       inboxCache.payload = payload;
       sendJson(res, 200, { ok: true, cached: false, ...payload });
@@ -1156,7 +1917,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "POST" && url.pathname.match(/^\/api\/sessions\/[^/]+\/messages$/)) {
     try {
-      const id = url.pathname.split("/")[3];
+      const id = decodeURIComponent(url.pathname.split("/")[3] || "");
       const body = JSON.parse(await readBody(req) || "{}");
       const message = String(body.message || "").trim();
       if (!message) {
@@ -1179,7 +1940,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && (url.pathname.startsWith("/api/sessions/events/") || url.pathname.startsWith("/api/codex/events/"))) {
-    const id = url.pathname.split("/").pop();
+    const id = decodeURIComponent(url.pathname.split("/").pop() || "");
     const session = sessions.get(id);
     if (!session) {
       sendJson(res, 404, { ok: false, error: "Unknown session." });
@@ -1214,6 +1975,10 @@ server.listen(PORT, HOST, () => {
   console.log(`Default harness: ${defaultHarnessId()}`);
   console.log("Open from this Mac or iPhone:");
   for (const url of getNetworkUrls()) {
+    console.log(`  ${url}`);
+  }
+  console.log("Pair a browser once (treat like a password):");
+  for (const url of getPairingUrls()) {
     console.log(`  ${url}`);
   }
 });

@@ -1016,10 +1016,47 @@
     <main class="inbox-body" id="inboxBody"></main>
   </section>
 
+  <section class="session-view" id="planView" hidden>
+    <header class="session-header">
+      <div class="session-header-top">
+        <button class="back-btn" id="closePlan" type="button">back</button>
+        <div class="session-heading">
+          <h2 id="planTitle">Plan</h2>
+          <p class="session-meta" id="planSubtitle">Review before dispatch.</p>
+        </div>
+        <button class="back-btn" id="approvePlan" type="button">approve</button>
+      </div>
+    </header>
+    <main class="session-body" id="planBody"></main>
+  </section>
+
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script>
+    function storedAuthToken() {
+      try { return window.localStorage.getItem("loupeApiToken") || ""; } catch { return ""; }
+    }
+
+    function storeAuthToken(token) {
+      try { window.localStorage.setItem("loupeApiToken", token); } catch {}
+    }
+
+    function capturePairingToken() {
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get("pair");
+      if (!token) return storedAuthToken();
+
+      storeAuthToken(token);
+      params.delete("pair");
+      const query = params.toString();
+      const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+      window.history.replaceState(null, "", nextUrl);
+      return token;
+    }
+
     const state = {
+      authToken: capturePairingToken(),
+      authRequired: false,
       health: null,
       workspaceId: null,
       harnessId: null,
@@ -1027,13 +1064,28 @@
       activeSessionId: null,
       activeSessionTab: "messages",
       eventSource: null,
+      historyLoaded: false,
       running: false,
       fsPath: null,
       fsListing: null,
-      inbox: { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null }
+      githubOAuth: { loading: false, flowId: null, userCode: null, verificationUri: null, interval: 5, error: null, timer: null },
+      inbox: { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null },
+      plan: { loading: false, ticket: null, plan: null, error: null }
     };
 
     const $ = (selector) => document.querySelector(selector);
+
+    function apiFetch(url, options = {}) {
+      const headers = new Headers(options.headers || {});
+      if (state.authToken) headers.set("x-loupe-token", state.authToken);
+      return fetch(url, { ...options, headers });
+    }
+
+    function authedApiUrl(path) {
+      const url = new URL(path, window.location.origin);
+      if (state.authToken) url.searchParams.set("token", state.authToken);
+      return `${url.pathname}${url.search}`;
+    }
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -1058,6 +1110,19 @@
 
     function selectedWorkspace() {
       return (state.health?.workspaces || []).find((workspace) => workspace.id === state.workspaceId);
+    }
+
+    function selectedReadiness() {
+      return (state.health?.workspaceReadiness || []).find((item) => item.workspaceId === state.workspaceId);
+    }
+
+    function readinessText(readiness) {
+      if (!readiness) return "readiness unknown";
+      if (readiness.canDispatch) {
+        const extras = readiness.warnings?.length ? ` · ${readiness.warnings[0]}` : "";
+        return `ready for PR dispatch${readiness.branch ? ` · ${readiness.branch}` : ""}${extras}`;
+      }
+      return `blocked: ${(readiness.blockers || []).join(" ") || "workspace not ready"}`;
     }
 
     function formatReset(timestampSeconds) {
@@ -1206,6 +1271,14 @@
               </article>
             `;
           }
+          if (item.role === "handoff") {
+            return `
+              <article class="item pr-ready">
+                <div class="item-head"><span>${escapeHtml(item.label)}</span><span>${escapeHtml(item.at)}</span></div>
+                <div class="item-body">${escapeHtml(item.body)}</div>
+              </article>
+            `;
+          }
           return `
             <article class="item">
               <div class="item-head"><span>${escapeHtml(item.label)}</span><span>${escapeHtml(item.at)}</span></div>
@@ -1244,7 +1317,7 @@
       state.running = isRunning;
       $("#sendButton").disabled = isRunning;
       $("#daemonPill").className = `pill ${isRunning ? "running" : state.health?.ok ? "online" : "failed"}`;
-      $("#daemonPillText").textContent = isRunning ? "running" : state.health?.ok ? "online" : "offline";
+      $("#daemonPillText").textContent = isRunning ? "running" : state.health?.ok ? "online" : state.authRequired ? "pair" : "offline";
     }
 
     function handleAgentEvent(session, event) {
@@ -1261,10 +1334,24 @@
       } else if (event.type === "stderr" || event.type === "stdout") {
         session.actions.push({ label: event.type, status: event.type, command: event.type, output: event.text, at });
       } else if (event.type === "user_message") {
+        const lastMessage = session.messages[session.messages.length - 1];
+        if (lastMessage?.role === "user" && lastMessage.body === (event.text || "")) {
+          return;
+        }
         session.messages.push({ role: "user", label: "you", body: event.text || "", at });
       } else if (event.type === "done") {
         session.status = event.status || "completed";
         session.actions.push({ label: "done", status: session.status, command: event.text, at });
+      } else if (event.type === "handoff") {
+        const handoff = event.handoff || {};
+        const body = [
+          handoff.tldr,
+          handoff.files_changed?.length ? `Files: ${handoff.files_changed.join(", ")}` : "",
+          handoff.tests_run?.length ? `Verified: ${handoff.tests_run.join("; ")}` : "",
+          handoff.risks?.length ? `Risks: ${handoff.risks.join("; ")}` : ""
+        ].filter(Boolean).join("\n\n");
+        session.handoff = handoff;
+        session.messages.push({ role: "handoff", label: event.kind === "captured" ? "handoff captured" : "handoff", body: body || "Handoff ready.", at });
       } else if (event.type === "codex") {
         const payload = event.payload || {};
         const item = payload.item;
@@ -1303,14 +1390,17 @@
         } else if (event.kind === "committed") {
           session.messages.push({ role: "system", label: "commit", body: `${event.subject} (${(event.sha || "").slice(0, 7)})${ctx}`, at });
         } else if (event.kind === "pr_ready") {
+          const url = event.prUrl || event.compareUrl;
           session.prReady = {
-            url: event.compareUrl,
+            url,
             branch: event.branch,
             base: event.base,
             repo: event.repo,
-            sha: event.sha
+            sha: event.sha,
+            number: event.prNumber
           };
-          session.messages.push({ role: "pr", label: "pr ready", body: event.text || "PR ready", url: event.compareUrl, at });
+          if (event.handoff) session.handoff = event.handoff;
+          session.messages.push({ role: "pr", label: event.prNumber ? `draft PR #${event.prNumber}` : "pr ready", body: event.text || "PR ready", url, at });
         } else if (event.kind === "no_changes") {
           session.messages.push({ role: "system", label: "no changes", body: event.text || "Agent made no changes.", at });
         } else if (event.kind === "skipped") {
@@ -1374,9 +1464,13 @@
       const health = state.health;
 
       if (!health?.ok) {
-        select.innerHTML = `<option>Offline</option>`;
-        $("#workspacePath").textContent = "Run node daemon.js on the Mac";
-        $("#phoneUrl").textContent = "Open from iPhone: unavailable";
+        select.innerHTML = `<option>${state.authRequired ? "Pairing required" : "Offline"}</option>`;
+        $("#workspacePath").textContent = state.authRequired
+          ? "Open the pairing URL printed by the Mac daemon"
+          : "Run node daemon.js on the Mac";
+        $("#phoneUrl").textContent = state.authRequired
+          ? "Pairing token missing or rejected"
+          : "Open from iPhone: unavailable";
         renderHarnesses();
         setRunning(false);
         return;
@@ -1391,7 +1485,10 @@
       `).join("");
 
       const selected = selectedWorkspace();
-      $("#workspacePath").textContent = selected ? selected.path : health.cwd;
+      const readiness = selectedReadiness();
+      $("#workspacePath").textContent = selected
+        ? `${selected.path} · ${readinessText(readiness)}`
+        : health.cwd;
       const phoneUrl = (health.urls || []).find((url) => !url.includes("localhost")) || location.href;
       $("#phoneUrl").textContent = `Open from iPhone: ${phoneUrl}`;
       renderHarnesses();
@@ -1446,7 +1543,7 @@
     async function loadFolder(folderPath) {
       const target = folderPath || state.fsPath || "";
       try {
-        const response = await fetch(`/api/fs/list?path=${encodeURIComponent(target)}`, { cache: "no-store" });
+        const response = await apiFetch(`/api/fs/list?path=${encodeURIComponent(target)}`, { cache: "no-store" });
         state.fsListing = await response.json();
         if (!response.ok || !state.fsListing.ok) throw new Error(state.fsListing.error || "Could not read folder");
       } catch (error) {
@@ -1463,7 +1560,7 @@
       }
 
       try {
-        const response = await fetch("/api/workspaces/create", {
+        const response = await apiFetch("/api/workspaces/create", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ parentPath: state.fsPath, name })
@@ -1482,16 +1579,65 @@
 
     async function checkHealth() {
       try {
-        const response = await fetch("/api/health", { cache: "no-store" });
+        const response = await apiFetch("/api/health", { cache: "no-store" });
         state.health = await response.json();
+        state.authRequired = response.status === 401 || !!state.health.authRequired;
         if (!response.ok || !state.health.ok) throw new Error("health check failed");
       } catch (error) {
         state.health = { ok: false, error: error.message };
       }
       renderHealth();
-      if (!state.fsPath) {
+      if (!state.authRequired && !state.fsPath) {
         const docs = state.health?.fsRoots?.find((root) => root.name === "Documents");
         await loadFolder(docs?.path || "");
+      }
+    }
+
+    function sessionFromRecord(record) {
+      const session = {
+        localId: record.id,
+        remoteId: record.id,
+        prompt: record.message || "",
+        title: shortPrompt(record.dispatch?.ticket?.title || record.message || record.id),
+        status: record.status || "completed",
+        workspace: record.workspace,
+        startedAt: record.startedAt ? new Date(record.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : now(),
+        eventCursor: 0,
+        harnessId: record.harnessId,
+        harnessLabel: record.harnessId === "claude-code" ? "claude code" : record.harnessId,
+        dispatch: record.dispatch || null,
+        branch: record.branch || null,
+        handoff: record.handoff || null,
+        messages: [],
+        files: [],
+        actions: []
+      };
+      for (const event of record.events || []) {
+        handleAgentEvent(session, event);
+      }
+      if (!session.messages.length && record.message) {
+        session.messages.push({ role: "user", label: "you", body: record.message, at: session.startedAt });
+      }
+      return session;
+    }
+
+    async function loadSessionHistory() {
+      if (state.historyLoaded || state.authRequired) return;
+      try {
+        const response = await apiFetch("/api/sessions", { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Could not load sessions");
+        const existing = new Set(state.sessions.map((session) => session.remoteId || session.localId));
+        const restored = (data.sessions || [])
+          .filter((record) => !existing.has(record.id))
+          .map(sessionFromRecord);
+        if (restored.length) {
+          state.sessions.push(...restored);
+          renderSessions();
+        }
+        state.historyLoaded = true;
+      } catch (error) {
+        console.warn(error.message);
       }
     }
 
@@ -1502,6 +1648,13 @@
       if (!harness || !harness.available) {
         toast("No agent selected. Install Codex or Claude Code and refresh.");
         return;
+      }
+      if (state.pendingDispatch?.mode === "branch") {
+        const readiness = selectedReadiness();
+        if (!readiness?.canDispatch) {
+          toast(`Workspace blocked: ${(readiness?.blockers || ["not ready"]).join(" ")}`);
+          return;
+        }
       }
 
       const session = createLocalSession(message);
@@ -1514,7 +1667,7 @@
       const dispatch = state.pendingDispatch || null;
       state.pendingDispatch = null;
       try {
-        const response = await fetch("/api/sessions/start", {
+        const response = await apiFetch("/api/sessions/start", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ message, workspaceId: state.workspaceId, harness: harnessId, dispatch })
@@ -1546,7 +1699,8 @@
     function connectSessionEvents(session) {
       if (state.eventSource) state.eventSource.close();
       const since = session.eventCursor || 0;
-      const source = new EventSource(`/api/sessions/events/${session.remoteId}?since=${since}`);
+      const sessionPathId = encodeURIComponent(session.remoteId);
+      const source = new EventSource(authedApiUrl(`/api/sessions/events/${sessionPathId}?since=${since}`));
       state.eventSource = source;
       source.onmessage = (event) => {
         const parsed = JSON.parse(event.data);
@@ -1581,7 +1735,8 @@
       renderSessionView();
 
       try {
-        const response = await fetch(`/api/sessions/${session.remoteId}/messages`, {
+        const sessionPathId = encodeURIComponent(session.remoteId);
+        const response = await apiFetch(`/api/sessions/${sessionPathId}/messages`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ message })
@@ -1694,15 +1849,160 @@
 
     function closeInbox() { $("#inboxView").hidden = true; }
 
+    function closePlan() { $("#planView").hidden = true; }
+
+    function planList(title, items, emptyText) {
+      const list = (items || []).length
+        ? items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
+        : `<li>${escapeHtml(emptyText)}</li>`;
+      return `
+        <article class="message-item">
+          <div class="item-head"><span>${escapeHtml(title)}</span></div>
+          <div class="item-body"><ul>${list}</ul></div>
+        </article>
+      `;
+    }
+
+    function renderPlan() {
+      const { loading, ticket, plan, error } = state.plan;
+      $("#planTitle").textContent = ticket ? `${ticket.repo}#${ticket.number}` : "Plan";
+      $("#planSubtitle").textContent = ticket?.title || "Review before dispatch.";
+      $("#approvePlan").disabled = loading || !!error || !plan;
+
+      if (loading) {
+        $("#planBody").innerHTML = `<div class="empty">Planning in read-only mode...</div>`;
+        return;
+      }
+      if (error) {
+        $("#planBody").innerHTML = `<div class="empty">${escapeHtml(error)}</div>`;
+        return;
+      }
+      if (!plan) {
+        $("#planBody").innerHTML = `<div class="empty">No plan yet.</div>`;
+        return;
+      }
+
+      $("#planBody").innerHTML = `
+        <article class="message-item">
+          <div class="item-head"><span>summary</span><span>${escapeHtml(plan.harness || "")}</span></div>
+          <div class="item-body">${escapeHtml(plan.summary)}</div>
+        </article>
+        ${planList("likely files", plan.likelyFiles, "No specific files predicted.")}
+        ${planList("risks", plan.risks, "No risks surfaced.")}
+        ${planList("tests", plan.tests, "No tests suggested.")}
+        ${planList("open questions", plan.openQuestions, "No open questions.")}
+        <article class="message-item">
+          <div class="item-head"><span>confidence</span></div>
+          <div class="item-body">${Math.round((Number(plan.confidence) || 0) * 100)}%</div>
+        </article>
+      `;
+    }
+
+    function ticketPrompt(ticket, plan) {
+      const labels = ticket.labels?.length ? `Labels: ${ticket.labels.join(", ")}\n` : "";
+      const planText = plan ? `
+Approved Loupe plan:
+Summary: ${plan.summary}
+Likely files:
+${(plan.likelyFiles || []).map((item) => `- ${item}`).join("\n") || "- none predicted"}
+Risks:
+${(plan.risks || []).map((item) => `- ${item}`).join("\n") || "- none surfaced"}
+Tests:
+${(plan.tests || []).map((item) => `- ${item}`).join("\n") || "- none suggested"}
+Open questions:
+${(plan.openQuestions || []).map((item) => `- ${item}`).join("\n") || "- none"}
+`.trim() : "";
+      return (
+        `[${ticket.kind === "review" ? "Review" : "Implement"} ${ticket.repo}#${ticket.number}]\n` +
+        `${ticket.title}\n\n` +
+        `${ticket.body ? ticket.body + "\n\n" : ""}` +
+        `${labels}` +
+        `URL: ${ticket.url}\n\n` +
+        (planText ? `${planText}\n\n` : "") +
+        `---\n` +
+        (ticket.kind === "review"
+          ? `Review this pull request. Summarize what it changes, flag risks, and suggest follow-ups. Do not modify files.`
+          : `Implement the approved Loupe plan above. Keep the change scoped to the ticket. The daemon will commit + push the branch and open a PR draft automatically — do not run git yourself.
+
+At the very end, output a fenced JSON block named HANDOFF with this exact shape:
+\`\`\`json
+{
+  "tldr": "one sentence",
+  "what_changed": ["change made"],
+  "files_changed": ["path"],
+  "tests_run": ["command/result"],
+  "tests_not_run": ["reason"],
+  "assumptions": ["assumption"],
+  "risks": ["risk"],
+  "confidence": 0.0
+}
+\`\`\``)
+      );
+    }
+
+    function setDispatchContext(ticket, plan) {
+      if (ticket.binding?.workspaceId) state.workspaceId = ticket.binding.workspaceId;
+      state.pendingDispatch = {
+        mode: ticket.kind === "review" ? "plain" : "branch",
+        ticket: { kind: ticket.kind, repo: ticket.repo, number: ticket.number, title: ticket.title, url: ticket.url },
+        plan: plan ? { id: plan.id, summary: plan.summary, likelyFiles: plan.likelyFiles, risks: plan.risks, tests: plan.tests, openQuestions: plan.openQuestions, confidence: plan.confidence } : null
+      };
+      renderHealth();
+    }
+
+    function ticketReadinessError(ticket) {
+      if (ticket.kind === "review") return "";
+      const readiness = selectedReadiness();
+      if (!readiness || readiness.canDispatch) return "";
+      return `Workspace is not ready for PR dispatch. ${(readiness.blockers || []).join(" ")}`;
+    }
+
+    async function createPlanForTicket(ticket) {
+      if (ticket.binding?.workspaceId) state.workspaceId = ticket.binding.workspaceId;
+      renderHealth();
+      const readinessError = ticketReadinessError(ticket);
+      if (readinessError) {
+        state.plan = { loading: false, ticket, plan: null, error: readinessError };
+        $("#planView").hidden = false;
+        renderPlan();
+        return;
+      }
+      state.plan = { loading: true, ticket, plan: null, error: null };
+      $("#planView").hidden = false;
+      renderPlan();
+      try {
+        const response = await apiFetch("/api/plans/create", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ticket, workspaceId: ticket.binding?.workspaceId || state.workspaceId, harness: state.harnessId })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Could not create plan");
+        state.plan = { loading: false, ticket, plan: data.plan, error: null };
+      } catch (error) {
+        state.plan = { loading: false, ticket, plan: null, error: error.message };
+      }
+      renderPlan();
+    }
+
+    function approveCurrentPlan() {
+      const { ticket, plan } = state.plan;
+      if (!ticket || !plan) return;
+      setDispatchContext(ticket, plan);
+      closePlan();
+      closeInbox();
+      startSession(ticketPrompt(ticket, plan));
+    }
+
     async function loadInbox({ force } = {}) {
       state.inbox.loading = true;
       state.inbox.error = null;
       renderInbox();
       try {
         const url = `/api/github/inbox${force ? "?refresh=1" : ""}`;
-        const response = await fetch(url, { cache: "no-store" });
+        const response = await apiFetch(url, { cache: "no-store" });
         const data = await response.json();
-        if (response.status === 400 && data.error?.toLowerCase().includes("token")) {
+        if (response.status === 400 && /token|not connected/i.test(data.error || "")) {
           state.inbox = { ...state.inbox, loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null };
           renderInbox(); renderInboxBadge();
           return;
@@ -1725,51 +2025,104 @@
       renderInboxBadge();
     }
 
-    async function connectGithub() {
-      const input = $("#githubTokenInput");
-      const token = (input?.value || "").trim();
-      if (!token) {
-        toast("Paste a GitHub token first.");
-        return;
-      }
+    function clearGithubOAuthTimer() {
+      if (state.githubOAuth.timer) window.clearTimeout(state.githubOAuth.timer);
+      state.githubOAuth.timer = null;
+    }
+
+    async function startGithubOAuth() {
+      clearGithubOAuthTimer();
+      state.githubOAuth = { loading: true, flowId: null, userCode: null, verificationUri: null, interval: 5, error: null, timer: null };
+      renderInbox();
       try {
-        const response = await fetch("/api/config/github", {
+        const response = await apiFetch("/api/github/oauth/start", {
           method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token })
+          headers: { "content-type": "application/json" }
         });
         const data = await response.json();
-        if (!response.ok || !data.ok) throw new Error(data.error || "Could not save token");
-        toast(`Connected as @${data.login}.`);
-        await loadInbox({ force: true });
+        if (!response.ok || !data.ok) throw new Error(data.error || "Could not start GitHub OAuth");
+        state.githubOAuth = {
+          loading: false,
+          flowId: data.flowId,
+          userCode: data.userCode,
+          verificationUri: data.verificationUri,
+          interval: data.interval || 5,
+          error: null,
+          timer: null
+        };
+        window.open(data.verificationUri, "_blank", "noopener");
+        scheduleGithubOAuthPoll();
+      } catch (error) {
+        state.githubOAuth.loading = false;
+        state.githubOAuth.error = error.message;
+      }
+      renderInbox();
+    }
+
+    function scheduleGithubOAuthPoll() {
+      clearGithubOAuthTimer();
+      if (!state.githubOAuth.flowId) return;
+      state.githubOAuth.timer = window.setTimeout(() => pollGithubOAuth(), Math.max(5, state.githubOAuth.interval || 5) * 1000);
+    }
+
+    async function pollGithubOAuth() {
+      if (!state.githubOAuth.flowId) return;
+      try {
+        const response = await apiFetch("/api/github/oauth/poll", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ flowId: state.githubOAuth.flowId })
+        });
+        const data = await response.json();
+        if (response.ok && data.ok) {
+          clearGithubOAuthTimer();
+          state.githubOAuth = { loading: false, flowId: null, userCode: null, verificationUri: null, interval: 5, error: null, timer: null };
+          toast(`Connected as @${data.login}.`);
+          await loadInbox({ force: true });
+          return;
+        }
+        if (response.status === 202 || data.status === "pending" || data.status === "waiting") {
+          state.githubOAuth.interval = data.interval || state.githubOAuth.interval || 5;
+          state.githubOAuth.error = data.waitSeconds ? `Waiting ${data.waitSeconds}s before checking again...` : "Waiting for GitHub authorization...";
+          renderInbox();
+          scheduleGithubOAuthPoll();
+          return;
+        }
+        throw new Error(data.error || "GitHub authorization failed");
+      } catch (error) {
+        clearGithubOAuthTimer();
+        state.githubOAuth.error = error.message;
+        renderInbox();
+      }
+    }
+
+    async function disconnectGithub() {
+      try {
+        const response = await apiFetch("/api/github/disconnect", {
+          method: "POST",
+          headers: { "content-type": "application/json" }
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Could not disconnect GitHub");
+        clearGithubOAuthTimer();
+        state.githubOAuth = { loading: false, flowId: null, userCode: null, verificationUri: null, interval: 5, error: null, timer: null };
+        state.inbox = { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null };
+        renderInbox(); renderInboxBadge();
+        toast("GitHub disconnected.");
       } catch (error) {
         toast(error.message);
       }
     }
 
     function dispatchTicket(ticket) {
-      const composer = $("#messageInput");
-      const labels = ticket.labels?.length ? `Labels: ${ticket.labels.join(", ")}\n` : "";
-      composer.value =
-        `[${ticket.kind === "review" ? "Review" : "Implement"} ${ticket.repo}#${ticket.number}]\n` +
-        `${ticket.title}\n\n` +
-        `${ticket.body ? ticket.body + "\n\n" : ""}` +
-        `${labels}` +
-        `URL: ${ticket.url}\n\n` +
-        `---\n` +
-        (ticket.kind === "review"
-          ? `Review this pull request. Summarize what it changes, flag risks, and suggest follow-ups. Do not modify files.`
-          : `Implement the change described above. When done, summarize what you did and list every file you touched. The daemon will commit + push the branch and open a PR draft automatically — do not run git yourself.`);
-      if (ticket.binding?.workspaceId) state.workspaceId = ticket.binding.workspaceId;
-      // Attach the ticket as the dispatch context — startSession reads this and
-      // forwards it so the daemon can name the branch + commit accordingly.
-      state.pendingDispatch = {
-        mode: ticket.kind === "review" ? "plain" : "branch",
-        ticket: { kind: ticket.kind, repo: ticket.repo, number: ticket.number, title: ticket.title, url: ticket.url }
-      };
-      renderHealth();
-      closeInbox();
-      toast(ticket.binding ? `Loaded ${ticket.repo}#${ticket.number} in ${ticket.binding.workspacePath.split("/").pop()}` : `Loaded ${ticket.repo}#${ticket.number}. Pick a workspace.`);
+      if (ticket.kind === "review") {
+        $("#messageInput").value = ticketPrompt(ticket, null);
+        setDispatchContext(ticket, null);
+        closeInbox();
+        toast(`Loaded ${ticket.repo}#${ticket.number} for review.`);
+        return;
+      }
+      createPlanForTicket(ticket);
     }
 
     function renderInbox() {
@@ -1791,17 +2144,32 @@
 
       if (!connected) {
         subtitle.textContent = "Not connected";
+        const oauth = state.githubOAuth;
+        const authBody = oauth.flowId
+          ? `
+            <p>Enter this code at GitHub, then Loupe will connect automatically.</p>
+            <div class="action-command" style="font-size: 22px; letter-spacing: 2px;">${escapeHtml(oauth.userCode)}</div>
+            <div class="inbox-connect-actions">
+              <a class="mini-btn primary" href="${escapeHtml(oauth.verificationUri)}" target="_blank" rel="noopener">open GitHub</a>
+              <button type="button" class="mini-btn" id="pollGithubOAuth">check now</button>
+            </div>
+            ${oauth.error ? `<p class="session-meta">${escapeHtml(oauth.error)}</p>` : ""}
+          `
+          : `
+            <p>Connect with GitHub OAuth. Loupe stores the resulting token at <span class="action-command">~/.loupe/config.json</span> on this Mac.</p>
+            ${oauth.error ? `<p class="session-meta">${escapeHtml(oauth.error)}</p>` : ""}
+            <div class="inbox-connect-actions">
+              <button type="button" class="mini-btn primary" id="startGithubOAuth" ${oauth.loading ? "disabled" : ""}>${oauth.loading ? "starting..." : "connect GitHub"}</button>
+            </div>
+          `;
         body.innerHTML = `
           <div class="inbox-connect">
             <h3>Connect GitHub</h3>
-            <p>Paste a GitHub personal access token with <span class="action-command">repo</span> scope. The token is stored at <span class="action-command">~/.loupe/config.json</span> on this Mac and never sent to the phone. <a href="https://github.com/settings/tokens/new?description=loupe&scopes=repo" target="_blank" rel="noopener">Create one →</a></p>
-            <input id="githubTokenInput" type="password" autocomplete="off" placeholder="ghp_..." />
-            <div class="inbox-connect-actions">
-              <button type="button" class="mini-btn primary" id="connectGithub">connect</button>
-            </div>
+            ${authBody}
           </div>
         `;
-        $("#connectGithub").addEventListener("click", connectGithub);
+        $("#startGithubOAuth")?.addEventListener("click", startGithubOAuth);
+        $("#pollGithubOAuth")?.addEventListener("click", pollGithubOAuth);
         return;
       }
 
@@ -1847,16 +2215,25 @@
           </section>
         `);
       }
+      const accountActions = `
+        <div class="inbox-connect-actions" style="justify-content: flex-end; margin-bottom: 10px;">
+          <button type="button" class="mini-btn" id="disconnectGithub">disconnect</button>
+        </div>
+      `;
       if (!sections.length) {
-        body.innerHTML = `<div class="empty">Inbox zero. Nothing assigned to @${escapeHtml(viewer?.login || "you")} right now.</div>`;
+        body.innerHTML = `${accountActions}<div class="empty">Inbox zero. Nothing assigned to @${escapeHtml(viewer?.login || "you")} right now.</div>`;
+        $("#disconnectGithub")?.addEventListener("click", disconnectGithub);
         return;
       }
-      body.innerHTML = sections.join("");
+      body.innerHTML = `${accountActions}${sections.join("")}`;
+      $("#disconnectGithub")?.addEventListener("click", disconnectGithub);
     }
 
     $("#inboxToggle").addEventListener("click", openInbox);
     $("#closeInbox").addEventListener("click", closeInbox);
     $("#refreshInbox").addEventListener("click", () => loadInbox({ force: true }));
+    $("#closePlan").addEventListener("click", closePlan);
+    $("#approvePlan").addEventListener("click", approveCurrentPlan);
     $("#inboxBody").addEventListener("click", (event) => {
       const card = event.target.closest("[data-ticket-id]");
       if (!card) return;
@@ -1871,7 +2248,8 @@
 
     renderSessions();
     renderInboxBadge();
-    checkHealth().then(() => {
+    checkHealth().then(async () => {
+      await loadSessionHistory();
       if (state.health?.config?.github?.configured) loadInbox();
     });
   </script>
