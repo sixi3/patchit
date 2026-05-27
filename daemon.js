@@ -19,6 +19,9 @@ const CLAUDE_PROJECTS_DIR = path.join(CLAUDE_HOME, "projects");
 const LOUPE_HOME = process.env.LOUPE_HOME || path.join(os.homedir(), ".loupe");
 const CONFIG_FILE = path.join(LOUPE_HOME, "config.json");
 const STATE_FILE = path.join(LOUPE_HOME, "state.json");
+const BLUEPRINT_PROMPT_FILE = path.join(ROOT, "blueprint.prompt.md");
+const BLUEPRINT_SCHEMA_FILE = path.join(ROOT, "blueprint.schema.json");
+const BLUEPRINT_CACHE_DIR = path.join(LOUPE_HOME, "blueprints");
 const GITHUB_OAUTH_CLIENT_ID = process.env.GITHUB_OAUTH_CLIENT_ID || "";
 const GITHUB_OAUTH_SCOPES = process.env.GITHUB_OAUTH_SCOPES || "repo read:user";
 
@@ -124,7 +127,8 @@ function serializeSession(session) {
     claudeSessionId: session.claudeSessionId || null,
     branch: session.branch || null,
     agentMessages: session.agentMessages || [],
-    handoff: session.handoff || null
+    handoff: session.handoff || null,
+    deviation: session.deviation || null
   };
 }
 
@@ -179,6 +183,7 @@ function hydrateState() {
       branch: saved.branch || null,
       agentMessages: Array.isArray(saved.agentMessages) ? saved.agentMessages : [],
       handoff: saved.handoff || null,
+      deviation: saved.deviation || null,
       child: null
     });
   }
@@ -249,6 +254,14 @@ function listWorkspaceBindings() {
       return binding ? { workspaceId: workspace.id, workspacePath: workspace.path, ...binding } : null;
     })
     .filter(Boolean);
+}
+
+function repoHeadSha(workspace) {
+  try {
+    const result = spawnSync("git", ["-C", workspace.path, "rev-parse", "HEAD"], { timeout: 1500, encoding: "utf8" });
+    if (result.status === 0) return result.stdout.trim();
+  } catch {}
+  return "no-git-head";
 }
 
 function workspaceReadiness(workspace) {
@@ -454,7 +467,9 @@ async function fetchGithubInbox(token) {
   function normalize(item, kind) {
     // search/issues returns issues and PRs together; pull_request is non-null for PRs.
     const repoFullName = (item.repository_url || "").replace("https://api.github.com/repos/", "");
-    return {
+    const binding = bindingFor(repoFullName);
+    const workspace = binding ? workspaces.find((w) => w.id === binding.workspaceId) : null;
+    const ticket = {
       kind, // "issue" or "review"
       id: item.id,
       number: item.number,
@@ -468,8 +483,11 @@ async function fetchGithubInbox(token) {
       updatedAt: item.updated_at,
       createdAt: item.created_at,
       author: item.user?.login || null,
-      binding: bindingFor(repoFullName)
+      binding,
+      blueprint: null
     };
+    ticket.blueprint = kind === "issue" && workspace ? readCachedBlueprintForTicket(ticket, workspace) : null;
+    return ticket;
   }
 
   const assigned = (assignedIssues.items || []).map((item) => normalize(item, "issue"));
@@ -840,7 +858,8 @@ function createSession(message, workspaceId, requestedHarness, dispatch) {
     claudeSessionId: null,
     branch: null, // populated by setupBranchIfApplicable when branch mode triggers
     agentMessages: [],
-    handoff: null
+    handoff: null,
+    deviation: null
   };
   sessions.set(id, session);
   addEvent(session, { type: "user_message", text: message });
@@ -959,6 +978,21 @@ function buildSessionHandoff(session, changedFiles) {
   return fallback;
 }
 
+function compareBlueprintHandoff(plan, changedFiles, handoff) {
+  const predicted = new Set((plan?.files || []).map((file) => file.path).filter(Boolean));
+  for (const file of plan?.likelyFiles || []) predicted.add(file);
+  const actual = new Set((changedFiles || handoff?.files_changed || []).filter(Boolean));
+  return {
+    filesTouchedNotPredicted: [...actual].filter((file) => !predicted.has(file)),
+    filesPredictedNotTouched: [...predicted].filter((file) => !actual.has(file)),
+    migrationsPredicted: (plan?.migrations || []).length,
+    migrationsTouched: [...actual].filter((file) => /(^|\/)(migrations|db\/migrate|alembic)(\/|$)/i.test(file)).length,
+    confidenceDelta: typeof handoff?.confidence === "number" && typeof (plan?.blueprintConfidence ?? plan?.confidence) === "number"
+      ? handoff.confidence - (plan.blueprintConfidence ?? plan.confidence)
+      : null
+  };
+}
+
 function markdownList(items, empty = "_None reported._") {
   return items?.length ? items.map((item) => `- ${item}`).join("\n") : empty;
 }
@@ -966,6 +1000,7 @@ function markdownList(items, empty = "_None reported._") {
 function formatPrBody(session, handoff, { branch, base, commitSha }) {
   const ticket = session.dispatch?.ticket;
   const plan = session.dispatch?.plan;
+  const deviation = session.deviation || null;
   return `## What I did
 ${handoff.tldr}
 
@@ -977,6 +1012,13 @@ ${plan?.summary || "No approved plan summary was recorded."}
 
 ## Files changed (${handoff.files_changed.length})
 ${markdownList(handoff.files_changed)}
+
+## Blueprint check
+${deviation ? markdownList([
+  deviation.filesTouchedNotPredicted.length ? `Touched but not predicted: ${deviation.filesTouchedNotPredicted.join(", ")}` : "No unpredicted files touched.",
+  deviation.filesPredictedNotTouched.length ? `Predicted but not touched: ${deviation.filesPredictedNotTouched.join(", ")}` : "All predicted files were either touched or intentionally avoided.",
+  `Migrations predicted/touched: ${deviation.migrationsPredicted}/${deviation.migrationsTouched}`
+]) : "_No Blueprint deviation computed._"}
 
 ## I want you to double-check
 ${markdownList([...handoff.assumptions, ...handoff.risks])}
@@ -1051,6 +1093,7 @@ function normalizePlan(raw, ticket, workspace, harnessId) {
 }
 
 function extractJsonObject(text) {
+  if (text && typeof text === "object") return text;
   const trimmed = String(text || "").trim();
   if (!trimmed) throw new Error("Plan runner returned no output.");
   try {
@@ -1068,6 +1111,19 @@ function extractJsonObject(text) {
     return JSON.parse(trimmed.slice(start, end + 1));
   }
   throw new Error("Plan runner did not return parseable JSON.");
+}
+
+function firstParseableJsonObject(candidates) {
+  let lastError = null;
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null || candidate === "") continue;
+    try {
+      return extractJsonObject(candidate);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Plan runner did not return parseable JSON.");
 }
 
 function runCapture(command, args, cwd, { timeout = 180_000 } = {}) {
@@ -1100,6 +1156,283 @@ function runCapture(command, args, cwd, { timeout = 180_000 } = {}) {
   });
 }
 
+function stableHash(value) {
+  return crypto
+    .createHash("sha256")
+    .update(typeof value === "string" ? value : JSON.stringify(value))
+    .digest("hex")
+    .slice(0, 24);
+}
+
+function ticketHash(ticket) {
+  return stableHash({
+    repo: ticket.repo || "",
+    number: ticket.number || "",
+    title: ticket.title || "",
+    body: ticket.body || "",
+    labels: ticket.labels || [],
+    updatedAt: ticket.updatedAt || ticket.updated_at || ""
+  });
+}
+
+function safeCacheName(value) {
+  return String(value || "unknown").replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "unknown";
+}
+
+function loadBlueprintArtifacts() {
+  const prompt = fs.readFileSync(BLUEPRINT_PROMPT_FILE, "utf8");
+  const schema = JSON.parse(fs.readFileSync(BLUEPRINT_SCHEMA_FILE, "utf8"));
+  return { prompt, schema };
+}
+
+function blueprintCachePath(ticket, workspace) {
+  const binding = workspaceRepoBinding(workspace);
+  const repoName = safeCacheName(ticket.repo || (binding ? `${binding.owner}-${binding.repo}` : workspace.name));
+  return path.join(BLUEPRINT_CACHE_DIR, `${repoName}.${ticketHash(ticket)}.${safeCacheName(repoHeadSha(workspace))}.json`);
+}
+
+function readCachedBlueprintForTicket(ticket, workspace) {
+  try {
+    const cachePath = blueprintCachePath(ticket, workspace);
+    const cached = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+    return normalizeBlueprint(cached, ticket, workspace, cached.provider || cached._provider || "cache", {
+      cached: true,
+      cachePath,
+      repoSha: cached.repoSha || cached._repo_sha,
+      ticketHash: cached.ticketHash || cached._ticket_hash,
+      costUsd: cached.costUsd ?? cached._cost_usd,
+      durationMs: cached.durationMs ?? cached._duration_ms,
+      model: cached.model || cached._model
+    });
+  } catch {
+    return { status: "not_started" };
+  }
+}
+
+function renderBlueprintPrompt(ticket, workspace) {
+  const { prompt, schema } = loadBlueprintArtifacts();
+  const systemPrompt = prompt
+    .replaceAll("{repo}", ticket.repo || "unknown")
+    .replaceAll("{workspace_path}", workspace.path)
+    .replaceAll("{repo_sha}", repoHeadSha(workspace));
+  const labels = Array.isArray(ticket.labels) && ticket.labels.length ? ticket.labels.join(", ") : "none";
+  const userPrompt = `# Ticket: ${ticket.repo || "unknown"}#${ticket.number || "unknown"}
+
+## Title
+${ticket.title || "Untitled"}
+
+## URL
+${ticket.url || "unknown"}
+
+## Labels
+${labels}
+
+## Body
+${ticket.body || "(empty)"}`;
+  return { systemPrompt, schema, userPrompt };
+}
+
+function asList(value, limit = 12) {
+  return Array.isArray(value)
+    ? value.map((item) => String(item || "").trim()).filter(Boolean).slice(0, limit)
+    : [];
+}
+
+function normalizeBlueprint(raw, ticket, workspace, providerId, meta = {}) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const outcome = source.outcome === "needs_info" ? "needs_info" : "ready";
+  const fileItems = Array.isArray(source.files) ? source.files : [];
+  const files = outcome === "needs_info" ? [] : fileItems
+    .map((file) => {
+      if (typeof file === "string") {
+        return { path: file, is_new: false, confidence: 0.7, why: "Predicted by planner." };
+      }
+      return {
+        path: String(file?.path || "").trim(),
+        is_new: !!file?.is_new,
+        confidence: Math.max(0, Math.min(1, Number(file?.confidence) || 0.5)),
+        why: String(file?.why || "Predicted by planner.").trim().slice(0, 200)
+      };
+    })
+    .filter((file) => file.path)
+    .slice(0, 6);
+  const deps = Array.isArray(source.deps) ? source.deps.map((dep) => ({
+    name: String(dep?.name || "").trim(),
+    ecosystem: String(dep?.ecosystem || "other").trim() || "other",
+    reason: String(dep?.reason || "").trim().slice(0, 200)
+  })).filter((dep) => dep.name).slice(0, 8) : [];
+  const migrations = Array.isArray(source.migrations) ? source.migrations.map((migration) => ({
+    purpose: String(migration?.purpose || "").trim().slice(0, 200),
+    risk: ["low", "medium", "high"].includes(migration?.risk) ? migration.risk : "medium",
+    kind: ["schema", "data", "index"].includes(migration?.kind) ? migration.kind : "schema"
+  })).filter((migration) => migration.purpose).slice(0, 8) : [];
+  const riskVocabulary = new Set(["payments", "auth", "security", "migration", "ml-quality", "concurrency", "data-loss", "performance", "infra", "observability"]);
+  const riskAreas = asList(source.risk_areas || source.riskAreas, 8).filter((risk) => riskVocabulary.has(risk));
+  const outOfScope = Array.isArray(source.out_of_scope) ? source.out_of_scope.map((item) => ({
+    path: String(item?.path || "").trim(),
+    reason: String(item?.reason || "").trim().slice(0, 200)
+  })).filter((item) => item.path).slice(0, 8) : [];
+  const confidence = Math.max(0, Math.min(1, Number(source.blueprint_confidence ?? source.confidence) || 0.5));
+  const summary = String(source.summary || (outcome === "needs_info" ? "Ticket needs more information before dispatch." : `Blueprint for ${ticket.repo || "repo"}#${ticket.number || "ticket"}`)).trim();
+
+  return {
+    id: source.id || `blueprint-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: source.createdAt || new Date().toISOString(),
+    outcome,
+    missingInfo: asList(source.missing_info || source.missingInfo, 8),
+    summary,
+    size: ["S", "M", "L", "XL"].includes(source.size) ? source.size : "M",
+    files,
+    deps,
+    migrations,
+    riskAreas,
+    outOfScope,
+    defaultAgent: ["claude", "codex"].includes(source.default_agent || source.defaultAgent) ? (source.default_agent || source.defaultAgent) : null,
+    blueprintConfidence: confidence,
+    provider: providerId,
+    harness: providerId,
+    workspace,
+    ticket,
+    cached: !!meta.cached,
+    cachePath: meta.cachePath || null,
+    repoSha: meta.repoSha || repoHeadSha(workspace),
+    ticketHash: meta.ticketHash || ticketHash(ticket),
+    costUsd: meta.costUsd ?? null,
+    durationMs: meta.durationMs ?? null,
+    model: meta.model || null,
+    // Backward-compatible fields for the existing plan UI and dispatch context.
+    likelyFiles: files.map((file) => file.path),
+    risks: [...riskAreas, ...migrations.map((migration) => `${migration.kind} migration: ${migration.purpose}`)],
+    tests: asList(source.tests || source.test_plan || source.testPlan, 8),
+    openQuestions: asList(source.open_questions || source.openQuestions || source.questions, 3),
+    confidence
+  };
+}
+
+function validateBlueprint(blueprint) {
+  if (!["ready", "needs_info"].includes(blueprint.outcome)) {
+    throw new Error("Blueprint outcome must be ready or needs_info.");
+  }
+  if (blueprint.outcome === "needs_info" && !blueprint.missingInfo.length) {
+    throw new Error("needs_info Blueprint must include missing_info.");
+  }
+  if (blueprint.outcome === "ready" && !blueprint.summary) {
+    throw new Error("ready Blueprint must include a summary.");
+  }
+  return blueprint;
+}
+
+class PlanningProvider {
+  constructor(deps) {
+    this.deps = deps;
+  }
+  get id() { throw new Error("Provider id is required."); }
+  get label() { return this.id; }
+  isAvailable() { return false; }
+  async generateBlueprint() { throw new Error("Provider generateBlueprint is required."); }
+}
+
+class ClaudeCliProvider extends PlanningProvider {
+  get id() { return "claude-cli"; }
+  get label() { return "Claude Code (CLI)"; }
+  isAvailable() {
+    return !!getHarness("claude-code")?.available;
+  }
+  async generateBlueprint({ systemPrompt, schema, userPrompt, cwd }) {
+    const schemaPath = path.join(LOUPE_HOME, "schemas", "blueprint.schema.json");
+    fs.mkdirSync(path.dirname(schemaPath), { recursive: true });
+    fs.writeFileSync(schemaPath, JSON.stringify(schema));
+    try { fs.chmodSync(schemaPath, 0o600); } catch {}
+
+    const args = [
+      "-p", userPrompt,
+      "--append-system-prompt", systemPrompt,
+      "--output-format", "json",
+      "--json-schema", JSON.stringify(schema),
+      "--permission-mode", "dontAsk",
+      "--allowedTools", "Read,Glob,Grep",
+      "--add-dir", cwd,
+      "--max-turns", "15"
+    ];
+    const { stdout } = await runCapture(CLAUDE_BIN, args, cwd, { timeout: 120_000 });
+    const parsed = JSON.parse(stdout);
+    const candidate = firstParseableJsonObject([parsed.structured_output, parsed.result, parsed.response, parsed.content, stdout]);
+    const structuredOutput = candidate?.structured_output || candidate;
+    if (!structuredOutput?.outcome) {
+      const detail = {
+        keys: Object.keys(parsed || {}),
+        result: typeof parsed?.result === "string" ? parsed.result.slice(0, 300) : parsed?.result,
+        permissionDenials: parsed?.permission_denials || []
+      };
+      throw new Error(`Claude CLI did not return Blueprint structured_output: ${JSON.stringify(detail)}`);
+    }
+    return {
+      structured_output: structuredOutput,
+      cost_usd: parsed.total_cost_usd ?? null,
+      duration_ms: parsed.duration_ms ?? null,
+      model: parsed.model ?? null,
+      provider: this.id
+    };
+  }
+}
+
+class CodexCliProvider extends PlanningProvider {
+  get id() { return "codex-cli"; }
+  get label() { return "Codex CLI"; }
+  isAvailable() {
+    return !!getHarness("codex")?.available;
+  }
+  async generateBlueprint({ systemPrompt, schema, userPrompt, cwd }) {
+    const prompt = `${systemPrompt}
+
+The required JSON Schema is:
+${JSON.stringify(schema)}
+
+Return only the JSON object. Do not wrap it in markdown.
+
+${userPrompt}`;
+    const args = [
+      "exec",
+      "--json",
+      "--sandbox", "read-only",
+      "--skip-git-repo-check",
+      "-C", cwd,
+      prompt
+    ];
+    const { stdout } = await runCapture(CODEX_BIN, args, cwd, { timeout: 120_000 });
+    return {
+      structured_output: parseCodexPlanOutput(stdout),
+      cost_usd: null,
+      duration_ms: null,
+      model: null,
+      provider: this.id
+    };
+  }
+}
+
+const PLANNING_REGISTRY = [
+  new ClaudeCliProvider(),
+  new CodexCliProvider()
+];
+
+function getActivePlanningProvider(requestedHarness) {
+  const requestedProvider = config.blueprint?.provider;
+  const available = PLANNING_REGISTRY.filter((provider) => provider.isAvailable());
+  const preferred = [
+    requestedProvider,
+    requestedHarness === "claude-code" ? "claude-cli" : null,
+    requestedHarness === "codex" ? "codex-cli" : null,
+    "claude-cli",
+    "codex-cli"
+  ].filter(Boolean);
+
+  for (const id of preferred) {
+    const match = available.find((provider) => provider.id === id);
+    if (match) return match;
+  }
+  return null;
+}
+
 function parseCodexPlanOutput(stdout) {
   let lastAgentMessage = "";
   for (const line of String(stdout || "").split(/\r?\n/)) {
@@ -1118,46 +1451,68 @@ function parseClaudePlanOutput(stdout) {
   return extractJsonObject(parsed.result || parsed.response || parsed.content || stdout);
 }
 
-async function createPlan(ticket, workspaceId, requestedHarness) {
+async function createBlueprint(ticket, workspaceId, requestedHarness, { bypassCache = false } = {}) {
   const workspace = resolveWorkspace(workspaceId);
-  const harnessId = (requestedHarness && getHarness(requestedHarness)?.available)
-    ? requestedHarness
-    : defaultHarnessId();
-  const harness = getHarness(harnessId);
-  if (!harness?.available) {
-    throw new Error(`Harness "${harnessId}" is not available on this Mac. Install Codex or Claude Code.`);
-  }
-  const prompt = buildPlanPrompt(ticket, workspace);
-  const cwd = workspace.path;
-
-  if (harnessId === "claude-code") {
-    const args = [
-      "-p", prompt,
-      "--output-format", "json",
-      "--permission-mode", "plan",
-      "--allowedTools", "Read,Glob,Grep",
-      "--add-dir", workspace.path
-    ];
-    const { stdout } = await runCapture(CLAUDE_BIN, args, cwd);
-    const plan = normalizePlan(parseClaudePlanOutput(stdout), ticket, workspace, harnessId);
-    plans.set(plan.id, plan);
-    persistState();
-    return plan;
+  fs.mkdirSync(BLUEPRINT_CACHE_DIR, { recursive: true });
+  const cachePath = blueprintCachePath(ticket, workspace);
+  if (!bypassCache) {
+    try {
+      const cached = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+      const blueprint = validateBlueprint(normalizeBlueprint(cached, ticket, workspace, cached.provider || cached._provider || "cache", {
+        cached: true,
+        cachePath,
+        repoSha: cached.repoSha || cached._repo_sha,
+        ticketHash: cached.ticketHash || cached._ticket_hash,
+        costUsd: cached.costUsd ?? cached._cost_usd,
+        durationMs: cached.durationMs ?? cached._duration_ms,
+        model: cached.model || cached._model
+      }));
+      plans.set(blueprint.id, blueprint);
+      return blueprint;
+    } catch {}
   }
 
-  const args = [
-    "exec",
-    "--json",
-    "--sandbox", "read-only",
-    "--skip-git-repo-check",
-    "-C", workspace.path,
-    prompt
-  ];
-  const { stdout } = await runCapture(CODEX_BIN, args, cwd);
-  const plan = normalizePlan(parseCodexPlanOutput(stdout), ticket, workspace, harnessId);
-  plans.set(plan.id, plan);
+  const provider = getActivePlanningProvider(requestedHarness);
+  if (!provider) {
+    throw new Error("No Blueprint provider is available. Install Claude Code or Codex CLI on this Mac.");
+  }
+  const { systemPrompt, schema, userPrompt } = renderBlueprintPrompt(ticket, workspace);
+  const startedAt = Date.now();
+  const result = await provider.generateBlueprint({
+    systemPrompt,
+    schema,
+    userPrompt,
+    cwd: workspace.path,
+    ticket
+  });
+  const blueprint = validateBlueprint(normalizeBlueprint(result.structured_output, ticket, workspace, result.provider || provider.id, {
+    cached: false,
+    cachePath,
+    repoSha: repoHeadSha(workspace),
+    ticketHash: ticketHash(ticket),
+    costUsd: result.cost_usd,
+    durationMs: result.duration_ms ?? Date.now() - startedAt,
+    model: result.model
+  }));
+  fs.writeFileSync(cachePath, JSON.stringify({
+    ...result.structured_output,
+    id: blueprint.id,
+    createdAt: blueprint.createdAt,
+    provider: blueprint.provider,
+    repoSha: blueprint.repoSha,
+    ticketHash: blueprint.ticketHash,
+    costUsd: blueprint.costUsd,
+    durationMs: blueprint.durationMs,
+    model: blueprint.model
+  }, null, 2));
+  try { fs.chmodSync(cachePath, 0o600); } catch {}
+  plans.set(blueprint.id, blueprint);
   persistState();
-  return plan;
+  return blueprint;
+}
+
+async function createPlan(ticket, workspaceId, requestedHarness) {
+  return createBlueprint(ticket, workspaceId, requestedHarness);
 }
 
 // ---------- Git branch / PR loop ----------
@@ -1251,7 +1606,10 @@ async function finalizeBranch(session) {
   }
   const changedFiles = changedFilesFromCachedDiff(cwd);
   const handoff = buildSessionHandoff(session, changedFiles);
+  const deviation = compareBlueprintHandoff(session.dispatch?.plan, changedFiles, handoff);
+  session.deviation = deviation;
   addEvent(session, { type: "handoff", kind: "ready", handoff });
+  addEvent(session, { type: "deviations_computed", deviation });
 
   // 3. Commit. Subject line from the ticket / first message line.
   const subject = (session.dispatch?.ticket?.title || session.message.split(/\r?\n/)[0] || "Loupe agent change").slice(0, 72);
@@ -1799,16 +2157,16 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === "POST" && url.pathname === "/api/plans/create") {
+  if (req.method === "POST" && (url.pathname === "/api/plans/create" || url.pathname === "/api/blueprints/create")) {
     try {
       const body = JSON.parse(await readBody(req) || "{}");
       const ticket = body.ticket || {};
       if (!ticket.title && !ticket.body) {
-        sendJson(res, 400, { ok: false, error: "Ticket title or body is required to create a plan." });
+        sendJson(res, 400, { ok: false, error: "Ticket title or body is required to create a Blueprint." });
         return;
       }
-      const plan = await createPlan(ticket, body.workspaceId, body.harness);
-      sendJson(res, 200, { ok: true, plan });
+      const blueprint = await createBlueprint(ticket, body.workspaceId, body.harness, { bypassCache: body.refresh === true });
+      sendJson(res, 200, { ok: true, blueprint, plan: blueprint });
     } catch (error) {
       sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
     }
@@ -1964,21 +2322,40 @@ const server = http.createServer(async (req, res) => {
   serveStatic(req, res);
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`Loupe Mac daemon listening on http://${HOST}:${PORT}`);
-  console.log("Harnesses detected:");
-  for (const harness of harnessRegistry) {
-    const status = harness.available ? `OK   (${harness.version || "version unknown"})` : "MISSING";
-    console.log(`  ${harness.id.padEnd(12)} ${status}`);
-    if (harness.bin) console.log(`               ${harness.bin}`);
-  }
-  console.log(`Default harness: ${defaultHarnessId()}`);
-  console.log("Open from this Mac or iPhone:");
-  for (const url of getNetworkUrls()) {
-    console.log(`  ${url}`);
-  }
-  console.log("Pair a browser once (treat like a password):");
-  for (const url of getPairingUrls()) {
-    console.log(`  ${url}`);
-  }
-});
+function startServer() {
+  server.listen(PORT, HOST, () => {
+    console.log(`Loupe Mac daemon listening on http://${HOST}:${PORT}`);
+    console.log("Harnesses detected:");
+    for (const harness of harnessRegistry) {
+      const status = harness.available ? `OK   (${harness.version || "version unknown"})` : "MISSING";
+      console.log(`  ${harness.id.padEnd(12)} ${status}`);
+      if (harness.bin) console.log(`               ${harness.bin}`);
+    }
+    console.log(`Default harness: ${defaultHarnessId()}`);
+    console.log("Open from this Mac or iPhone:");
+    for (const url of getNetworkUrls()) {
+      console.log(`  ${url}`);
+    }
+    console.log("Pair a browser once (treat like a password):");
+    for (const url of getPairingUrls()) {
+      console.log(`  ${url}`);
+    }
+  });
+}
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = {
+  createBlueprint,
+  createPlan,
+  normalizeBlueprint,
+  validateBlueprint,
+  compareBlueprintHandoff,
+  renderBlueprintPrompt,
+  ticketHash,
+  repoHeadSha,
+  workspaceReadiness,
+  startServer
+};

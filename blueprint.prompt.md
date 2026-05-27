@@ -72,9 +72,9 @@ will be re-prompted to fix it. Get it right the first time.
 - Include name + ecosystem (npm/pip/cargo/etc) + reason.
 
 ## migrations
-- Set "required": true only if you have read the migrations directory
-  AND concluded a schema mutation is needed.
-- Provide a one-sentence purpose, NOT full SQL.
+- Add an item only if you have read the migrations directory AND
+  concluded a schema mutation is needed.
+- Provide purpose, risk, and kind. Do NOT write full SQL.
 - Do not fabricate migration filenames — the agent assigns the sequence.
 
 ## risk_areas

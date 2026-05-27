@@ -1154,10 +1154,10 @@
       <div class="session-header-top">
         <button class="back-btn" id="closePlan" type="button">back</button>
         <div class="session-heading">
-          <h2 id="planTitle">Plan</h2>
+          <h2 id="planTitle">Blueprint</h2>
           <p class="session-meta" id="planSubtitle">Review before dispatch.</p>
         </div>
-        <button class="back-btn" id="approvePlan" type="button">approve</button>
+        <button class="back-btn" id="approvePlan" type="button">dispatch</button>
       </div>
     </header>
     <main class="session-body" id="planBody"></main>
@@ -1520,6 +1520,14 @@
         ].filter(Boolean).join("\n\n");
         session.handoff = handoff;
         session.messages.push({ role: "handoff", label: event.kind === "captured" ? "handoff captured" : "handoff", body: body || "Handoff ready.", at });
+      } else if (event.type === "deviations_computed") {
+        const deviation = event.deviation || {};
+        const body = [
+          deviation.filesTouchedNotPredicted?.length ? `Touched but not predicted: ${deviation.filesTouchedNotPredicted.join(", ")}` : "No unpredicted files touched.",
+          deviation.filesPredictedNotTouched?.length ? `Predicted but not touched: ${deviation.filesPredictedNotTouched.join(", ")}` : "",
+          typeof deviation.migrationsPredicted === "number" ? `Migrations predicted/touched: ${deviation.migrationsPredicted}/${deviation.migrationsTouched || 0}` : ""
+        ].filter(Boolean).join("\n\n");
+        session.messages.push({ role: "system", label: "blueprint check", body, at });
       } else if (event.type === "codex") {
         const payload = event.payload || {};
         const item = payload.item;
@@ -2040,12 +2048,14 @@
 
     function renderPlan() {
       const { loading, ticket, plan, error } = state.plan;
-      $("#planTitle").textContent = ticket ? `${ticket.repo}#${ticket.number}` : "Plan";
+      $("#planTitle").textContent = ticket ? `${ticket.repo}#${ticket.number}` : "Blueprint";
       $("#planSubtitle").textContent = ticket?.title || "Review before dispatch.";
-      $("#approvePlan").disabled = loading || !!error || !plan;
+      const blocked = plan?.outcome === "needs_info";
+      $("#approvePlan").disabled = loading || !!error || !plan || blocked;
+      $("#approvePlan").textContent = blocked ? "needs info" : "dispatch";
 
       if (loading) {
-        $("#planBody").innerHTML = `<div class="empty">Planning in read-only mode...</div>`;
+        $("#planBody").innerHTML = `<div class="empty">Building Blueprint in read-only mode...</div>`;
         return;
       }
       if (error) {
@@ -2053,22 +2063,35 @@
         return;
       }
       if (!plan) {
-        $("#planBody").innerHTML = `<div class="empty">No plan yet.</div>`;
+        $("#planBody").innerHTML = `<div class="empty">No Blueprint yet.</div>`;
+        return;
+      }
+      if (plan.outcome === "needs_info") {
+        $("#planBody").innerHTML = `
+          <article class="message-item">
+            <div class="item-head"><span>needs info</span><span>${escapeHtml(plan.provider || plan.harness || "")}</span></div>
+            <div class="item-body">${escapeHtml(plan.summary || "Ticket needs clarification before dispatch.")}</div>
+          </article>
+          ${planList("missing info", plan.missingInfo, "No specific gaps returned.")}
+        `;
         return;
       }
 
       $("#planBody").innerHTML = `
         <article class="message-item">
-          <div class="item-head"><span>summary</span><span>${escapeHtml(plan.harness || "")}</span></div>
+          <div class="item-head"><span>summary</span><span>${escapeHtml(plan.provider || plan.harness || "")}${plan.cached ? " · cached" : ""}</span></div>
           <div class="item-body">${escapeHtml(plan.summary)}</div>
         </article>
-        ${planList("likely files", plan.likelyFiles, "No specific files predicted.")}
-        ${planList("risks", plan.risks, "No risks surfaced.")}
+        ${planList("predicted files", (plan.files || []).map((file) => `${file.path}${file.is_new ? " (new)" : ""} · ${Math.round((Number(file.confidence) || 0) * 100)}% — ${file.why || ""}`), "No specific files predicted.")}
+        ${planList("dependencies", (plan.deps || []).map((dep) => `${dep.name}${dep.ecosystem ? ` (${dep.ecosystem})` : ""} — ${dep.reason || ""}`), "No new dependencies predicted.")}
+        ${planList("migrations", (plan.migrations || []).map((migration) => `${migration.kind || "schema"} · ${migration.risk || "medium"} — ${migration.purpose || ""}`), "No migrations predicted.")}
+        ${planList("risk areas", plan.riskAreas, "No risk areas surfaced.")}
+        ${planList("out of scope", (plan.outOfScope || []).map((item) => `${item.path} — ${item.reason || ""}`), "No explicit out-of-scope files.")}
         ${planList("tests", plan.tests, "No tests suggested.")}
         ${planList("open questions", plan.openQuestions, "No open questions.")}
         <article class="message-item">
-          <div class="item-head"><span>confidence</span></div>
-          <div class="item-body">${Math.round((Number(plan.confidence) || 0) * 100)}%</div>
+          <div class="item-head"><span>confidence</span><span>${escapeHtml(plan.size || "")}</span></div>
+          <div class="item-body">${Math.round((Number(plan.blueprintConfidence ?? plan.confidence) || 0) * 100)}%</div>
         </article>
       `;
     }
@@ -2076,16 +2099,25 @@
     function ticketPrompt(ticket, plan) {
       const labels = ticket.labels?.length ? `Labels: ${ticket.labels.join(", ")}\n` : "";
       const planText = plan ? `
-Approved Loupe plan:
+Approved Loupe Blueprint:
+Outcome: ${plan.outcome || "ready"}
 Summary: ${plan.summary}
-Likely files:
-${(plan.likelyFiles || []).map((item) => `- ${item}`).join("\n") || "- none predicted"}
-Risks:
-${(plan.risks || []).map((item) => `- ${item}`).join("\n") || "- none surfaced"}
+Size: ${plan.size || "M"}
+Predicted files:
+${(plan.files || []).map((file) => `- ${file.path}${file.is_new ? " (new)" : ""}: ${file.why || "predicted"}`).join("\n") || (plan.likelyFiles || []).map((item) => `- ${item}`).join("\n") || "- none predicted"}
+Dependencies:
+${(plan.deps || []).map((dep) => `- ${dep.name}${dep.ecosystem ? ` (${dep.ecosystem})` : ""}: ${dep.reason || ""}`).join("\n") || "- none predicted"}
+Migrations:
+${(plan.migrations || []).map((migration) => `- ${migration.kind || "schema"} / ${migration.risk || "medium"}: ${migration.purpose || ""}`).join("\n") || "- none predicted"}
+Risk areas:
+${(plan.riskAreas || plan.risks || []).map((item) => `- ${item}`).join("\n") || "- none surfaced"}
+Out of scope:
+${(plan.outOfScope || []).map((item) => `- ${item.path}: ${item.reason || ""}`).join("\n") || "- none"}
 Tests:
 ${(plan.tests || []).map((item) => `- ${item}`).join("\n") || "- none suggested"}
 Open questions:
 ${(plan.openQuestions || []).map((item) => `- ${item}`).join("\n") || "- none"}
+Confidence: ${Math.round((Number(plan.blueprintConfidence ?? plan.confidence) || 0) * 100)}%
 `.trim() : "";
       return (
         `[${ticket.kind === "review" ? "Review" : "Implement"} ${ticket.repo}#${ticket.number}]\n` +
@@ -2097,7 +2129,7 @@ ${(plan.openQuestions || []).map((item) => `- ${item}`).join("\n") || "- none"}
         `---\n` +
         (ticket.kind === "review"
           ? `Review this pull request. Summarize what it changes, flag risks, and suggest follow-ups. Do not modify files.`
-          : `Implement the approved Loupe plan above. Keep the change scoped to the ticket. The daemon will commit + push the branch and open a PR draft automatically — do not run git yourself.
+          : `Implement the approved Loupe Blueprint above. Keep the change scoped to the ticket. Treat "out of scope" files as protected unless the change is impossible without them. The daemon will commit + push the branch and open a PR draft automatically — do not run git yourself.
 
 At the very end, output a fenced JSON block named HANDOFF with this exact shape:
 \`\`\`json
@@ -2120,7 +2152,23 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
       state.pendingDispatch = {
         mode: ticket.kind === "review" ? "plain" : "branch",
         ticket: { kind: ticket.kind, repo: ticket.repo, number: ticket.number, title: ticket.title, url: ticket.url },
-        plan: plan ? { id: plan.id, summary: plan.summary, likelyFiles: plan.likelyFiles, risks: plan.risks, tests: plan.tests, openQuestions: plan.openQuestions, confidence: plan.confidence } : null
+        plan: plan ? {
+          id: plan.id,
+          outcome: plan.outcome,
+          summary: plan.summary,
+          size: plan.size,
+          files: plan.files || [],
+          likelyFiles: plan.likelyFiles || (plan.files || []).map((file) => file.path),
+          deps: plan.deps || [],
+          migrations: plan.migrations || [],
+          riskAreas: plan.riskAreas || [],
+          risks: plan.risks || plan.riskAreas || [],
+          outOfScope: plan.outOfScope || [],
+          tests: plan.tests,
+          openQuestions: plan.openQuestions,
+          blueprintConfidence: plan.blueprintConfidence ?? plan.confidence,
+          confidence: plan.confidence
+        } : null
       };
       renderHealth();
     }
@@ -2146,14 +2194,14 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
       $("#planView").hidden = false;
       renderPlan();
       try {
-        const response = await apiFetch("/api/plans/create", {
+        const response = await apiFetch("/api/blueprints/create", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ ticket, workspaceId: ticket.binding?.workspaceId || state.workspaceId, harness: state.harnessId })
         });
         const data = await response.json();
-        if (!response.ok || !data.ok) throw new Error(data.error || "Could not create plan");
-        state.plan = { loading: false, ticket, plan: data.plan, error: null };
+        if (!response.ok || !data.ok) throw new Error(data.error || "Could not create Blueprint");
+        state.plan = { loading: false, ticket, plan: data.blueprint || data.plan, error: null };
       } catch (error) {
         state.plan = { loading: false, ticket, plan: null, error: error.message };
       }
@@ -2163,6 +2211,10 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
     function approveCurrentPlan() {
       const { ticket, plan } = state.plan;
       if (!ticket || !plan) return;
+      if (plan.outcome === "needs_info") {
+        toast("This ticket needs more info before dispatch.");
+        return;
+      }
       setDispatchContext(ticket, plan);
       closePlan();
       closeInbox();
@@ -2357,6 +2409,18 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
           ? `<span class="inbox-tag bind">${escapeHtml(item.binding.workspacePath.split("/").pop())}</span>`
           : `<span class="inbox-tag nobind">no workspace</span>`;
         const labels = (item.labels || []).slice(0, 3).map((l) => `<span class="inbox-tag">${escapeHtml(l)}</span>`).join("");
+        const blueprint = item.blueprint;
+        const blueprintTags = item.kind === "issue" && blueprint
+          ? blueprint.outcome === "needs_info"
+            ? `<span class="inbox-tag nobind">needs info</span>`
+            : blueprint.status === "not_started"
+              ? `<span class="inbox-tag">blueprint on tap</span>`
+              : `
+                <span class="inbox-tag bind">${escapeHtml(blueprint.size || "M")}</span>
+                <span class="inbox-tag">${escapeHtml(String((blueprint.files || []).length))} files</span>
+                ${(blueprint.riskAreas || []).slice(0, 2).map((risk) => `<span class="inbox-tag nobind">${escapeHtml(risk)}</span>`).join("")}
+              `
+          : "";
         return `
           <button class="inbox-card" type="button" data-ticket-id="${escapeHtml(String(item.id))}">
             <div class="inbox-card-top">
@@ -2368,6 +2432,7 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
               <span class="inbox-tag ${kindClass}">${escapeHtml(kindLabel)}</span>
               ${bindTag}
               ${labels}
+              ${blueprintTags}
             </div>
           </button>
         `;
