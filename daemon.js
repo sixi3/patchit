@@ -706,6 +706,11 @@ function listFolders(dirPath) {
 }
 
 function sendJson(res, status, payload) {
+  if (res.writableEnded) return;
+  if (res.headersSent) {
+    res.end();
+    return;
+  }
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": "*"
