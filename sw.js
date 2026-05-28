@@ -1,4 +1,4 @@
-const CACHE_NAME = "loupe-demo-v22";
+const CACHE_NAME = "loupe-demo-v23";
 const ASSETS = [
   "./",
   "./index.html",

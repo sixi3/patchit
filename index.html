@@ -1411,7 +1411,7 @@
       fsListing: null,
       githubOAuth: { loading: false, flowId: null, userCode: null, verificationUri: null, interval: 5, error: null, timer: null },
       inbox: { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null, expandedTicketId: null },
-      issueDraft: { open: false, loading: false, drafting: false, error: null, repo: "", title: "", body: "", assignSelf: true },
+      issueDraft: { open: false, loading: false, drafting: false, draftFailed: false, error: null, repo: "", title: "", body: "", assignSelf: true },
       plan: { loading: false, ticket: null, plan: null, error: null },
       prReview: { loading: false, pr: null, error: null, source: null }
     };
@@ -2228,6 +2228,7 @@
         open: true,
         loading: false,
         drafting: true,
+        draftFailed: false,
         error: null,
         repo: repoForSelectedWorkspace(),
         title: "",
@@ -2249,6 +2250,7 @@
           open: true,
           loading: false,
           drafting: false,
+          draftFailed: false,
           error: null,
           repo: data.draft.repo || repoForSelectedWorkspace(),
           title: data.draft.title || "",
@@ -2258,14 +2260,18 @@
         renderInbox();
         toast("Issue draft ready.");
       } catch (error) {
+        const staleRoute = error.message === "Not found";
         state.issueDraft = {
           open: true,
           loading: false,
           drafting: false,
-          error: `Could not draft with agent: ${error.message}`,
+          draftFailed: true,
+          error: staleRoute
+            ? "Issue drafting route was not found. Refresh this page once, then try again."
+            : `Could not draft with agent: ${error.message}`,
           repo: repoForSelectedWorkspace(),
           title: "",
-          body: message,
+          body: "",
           assignSelf: true
         };
         renderInbox();
@@ -2833,7 +2839,7 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
         clearGithubOAuthTimer();
         state.githubOAuth = { loading: false, flowId: null, userCode: null, verificationUri: null, interval: 5, error: null, timer: null };
         state.inbox = { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null, expandedTicketId: null };
-        state.issueDraft = { open: false, loading: false, drafting: false, error: null, repo: "", title: "", body: "", assignSelf: true };
+        state.issueDraft = { open: false, loading: false, drafting: false, draftFailed: false, error: null, repo: "", title: "", body: "", assignSelf: true };
         renderInbox(); renderInboxBadge();
         toast("GitHub disconnected.");
       } catch (error) {
@@ -2909,7 +2915,7 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
             ${state.issueDraft.error ? `<p class="session-meta">${escapeHtml(state.issueDraft.error)}</p>` : ""}
             <div class="inbox-connect-actions">
               <button type="button" class="mini-btn" id="cancelIssueDraft">cancel</button>
-              <button type="submit" class="mini-btn primary" ${state.issueDraft.loading || !repos.length ? "disabled" : ""}>${state.issueDraft.loading ? "creating..." : "create issue"}</button>
+              <button type="submit" class="mini-btn primary" ${state.issueDraft.loading || state.issueDraft.draftFailed || !repos.length ? "disabled" : ""}>${state.issueDraft.loading ? "creating..." : "create issue"}</button>
             </div>
           </form>
 	        </div>
@@ -2945,7 +2951,7 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
         });
         const data = await readApiJson(response, "Could not create issue");
         if (!response.ok || !data.ok) throw new Error(data.error || "Could not create issue");
-        state.issueDraft = { open: false, loading: false, drafting: false, error: null, repo: "", title: "", body: "", assignSelf: true };
+        state.issueDraft = { open: false, loading: false, drafting: false, draftFailed: false, error: null, repo: "", title: "", body: "", assignSelf: true };
         toast(`Created ${data.issue.repo}#${data.issue.number}.`);
         await loadInbox({ force: true });
       } catch (error) {
@@ -3177,19 +3183,19 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
         body.innerHTML = `${accountActions}${issueDraft}<div class="empty">Inbox zero. Nothing assigned to @${escapeHtml(viewer?.login || "you")} right now.</div>`;
         $("#disconnectGithub")?.addEventListener("click", disconnectGithub);
         $("#issueDraftForm")?.addEventListener("submit", submitIssueDraft);
-        $("#cancelIssueDraft")?.addEventListener("click", () => { state.issueDraft = { open: false, loading: false, drafting: false, error: null, repo: "", title: "", body: "", assignSelf: true }; renderInbox(); });
+        $("#cancelIssueDraft")?.addEventListener("click", () => { state.issueDraft = { open: false, loading: false, drafting: false, draftFailed: false, error: null, repo: "", title: "", body: "", assignSelf: true }; renderInbox(); });
         return;
       }
       body.innerHTML = `${accountActions}${issueDraft}${sections.join("")}`;
       $("#disconnectGithub")?.addEventListener("click", disconnectGithub);
       $("#issueDraftForm")?.addEventListener("submit", submitIssueDraft);
-      $("#cancelIssueDraft")?.addEventListener("click", () => { state.issueDraft = { open: false, loading: false, drafting: false, error: null, repo: "", title: "", body: "", assignSelf: true }; renderInbox(); });
+      $("#cancelIssueDraft")?.addEventListener("click", () => { state.issueDraft = { open: false, loading: false, drafting: false, draftFailed: false, error: null, repo: "", title: "", body: "", assignSelf: true }; renderInbox(); });
     }
 
     $("#inboxToggle").addEventListener("click", openInbox);
     $("#closeInbox").addEventListener("click", closeInbox);
     $("#newIssue").addEventListener("click", () => {
-      state.issueDraft = { ...state.issueDraft, open: !state.issueDraft.open, loading: false, drafting: false, error: null };
+      state.issueDraft = { ...state.issueDraft, open: !state.issueDraft.open, loading: false, drafting: false, draftFailed: false, error: null };
       renderInbox();
     });
     $("#refreshInbox").addEventListener("click", () => loadInbox({ force: true }));

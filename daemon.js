@@ -2787,7 +2787,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === "POST" && url.pathname === "/api/github/issues/draft") {
+  if (req.method === "POST" && ["/api/github/issues/draft", "/api/github/issues/draft/", "/api/v1/github/issues/draft"].includes(url.pathname)) {
     try {
       const body = JSON.parse(await readBody(req) || "{}");
       const message = String(body.message || "").trim();
@@ -2795,6 +2795,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { ok: false, error: "Message is required to draft an issue." });
         return;
       }
+      console.log(`Drafting GitHub issue via ${body.harness || "default"} for ${body.workspaceId || "default workspace"}`);
       const draft = await draftGithubIssue({
         message,
         workspaceId: body.workspaceId,
