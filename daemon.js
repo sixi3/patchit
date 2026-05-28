@@ -1788,6 +1788,26 @@ const PLANNING_REGISTRY = [
   new CodexCliProvider()
 ];
 
+const ISSUE_DRAFT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["title", "body"],
+  properties: {
+    title: {
+      type: "string",
+      minLength: 8,
+      maxLength: 120,
+      description: "A concise, actionable GitHub issue title."
+    },
+    body: {
+      type: "string",
+      minLength: 40,
+      maxLength: 6000,
+      description: "A complete GitHub issue body in Markdown."
+    }
+  }
+};
+
 function getActivePlanningProvider(requestedHarness) {
   const requestedProvider = config.blueprint?.provider;
   const available = PLANNING_REGISTRY.filter((provider) => provider.isAvailable());
@@ -1822,6 +1842,64 @@ function parseCodexPlanOutput(stdout) {
 function parseClaudePlanOutput(stdout) {
   const parsed = JSON.parse(stdout);
   return extractJsonObject(parsed.result || parsed.response || parsed.content || stdout);
+}
+
+function normalizeIssueDraft(raw, originalMessage) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const fallbackTitle = String(originalMessage || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean) || "Draft GitHub issue";
+  const title = String(source.title || fallbackTitle)
+    .replace(/^#+\s*/, "")
+    .trim()
+    .slice(0, 120);
+  const body = String(source.body || originalMessage || "")
+    .trim()
+    .slice(0, 6000);
+  return {
+    title: title || "Draft GitHub issue",
+    body: body || String(originalMessage || "").trim()
+  };
+}
+
+async function draftGithubIssue({ message, workspaceId, requestedHarness }) {
+  const workspace = resolveWorkspace(workspaceId);
+  const provider = getActivePlanningProvider(requestedHarness);
+  if (!provider) {
+    const error = new Error("No local agent is available to draft the issue. Install Codex or Claude Code and refresh.");
+    error.statusCode = 503;
+    throw error;
+  }
+  const binding = workspaceRepoBinding(workspace);
+  const repo = binding ? `${binding.owner}/${binding.repo}` : "unknown";
+  const systemPrompt = `You draft GitHub issues for Loupe users. Convert the user's rough request into a ready-to-review GitHub issue.
+
+Rules:
+- Do not claim the issue was created.
+- Do not call tools or access the network.
+- Preserve the user's intent, but rewrite it as an actionable issue for a developer.
+- Include useful sections when implied: Problem, Desired behavior, Acceptance criteria, Suggested files, Test plan.
+- Return only JSON matching the schema.`;
+  const userPrompt = `Workspace: ${workspace.name}
+Path: ${workspace.path}
+Repo: ${repo}
+
+User request:
+${String(message || "").trim()}
+
+Draft the GitHub issue title and Markdown body.`;
+  const result = await provider.generateBlueprint({
+    systemPrompt,
+    schema: ISSUE_DRAFT_SCHEMA,
+    userPrompt,
+    cwd: workspace.path
+  });
+  return {
+    ...normalizeIssueDraft(result.structured_output, message),
+    repo: binding ? `${binding.owner}/${binding.repo}` : "",
+    provider: result.provider || provider.id
+  };
 }
 
 async function createBlueprint(ticket, workspaceId, requestedHarness, { bypassCache = false } = {}) {
@@ -2662,6 +2740,26 @@ const server = http.createServer(async (req, res) => {
       const blueprint = await createBlueprint(ticket, body.workspaceId, body.harness, { bypassCache: body.refresh === true });
       const publicPlan = publicBlueprint(blueprint);
       sendJson(res, 200, { ok: true, blueprint: publicPlan, plan: publicPlan });
+    } catch (error) {
+      sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/github/issues/draft") {
+    try {
+      const body = JSON.parse(await readBody(req) || "{}");
+      const message = String(body.message || "").trim();
+      if (!message) {
+        sendJson(res, 400, { ok: false, error: "Message is required to draft an issue." });
+        return;
+      }
+      const draft = await draftGithubIssue({
+        message,
+        workspaceId: body.workspaceId,
+        requestedHarness: body.harness
+      });
+      sendJson(res, 200, { ok: true, draft });
     } catch (error) {
       sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
     }
