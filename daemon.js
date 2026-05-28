@@ -193,11 +193,32 @@ function createSecretToken() {
   return crypto.randomBytes(32).toString("base64url");
 }
 
+function hashToken(token) {
+  return crypto.createHash("sha256").update(String(token || "")).digest("hex");
+}
+
+function ensureDeviceRegistry() {
+  if (!Array.isArray(config.devices)) config.devices = [];
+  if (config.apiToken && !config.devices.some((device) => device.tokenHash === hashToken(config.apiToken))) {
+    config.devices.push({
+      id: `device-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      name: "Paired browser",
+      tokenHash: hashToken(config.apiToken),
+      createdAt: new Date().toISOString(),
+      lastSeenAt: null,
+      lastIp: null,
+      revokedAt: null
+    });
+    saveConfig();
+  }
+}
+
 function ensureAlphaAuth() {
   if (!config.apiToken) {
     config.apiToken = createSecretToken();
     saveConfig();
   }
+  ensureDeviceRegistry();
 }
 
 function tokenPreview(token) {
@@ -218,7 +239,14 @@ function configSummary() {
       avatarUrl: githubAuth.avatarUrl || null,
       authType: githubAuth.accessToken ? "oauth" : config.githubToken ? "pat" : null,
       oauthClientConfigured: !!GITHUB_OAUTH_CLIENT_ID
-    }
+    },
+    devices: (config.devices || []).filter((device) => !device.revokedAt).map((device) => ({
+      id: device.id,
+      name: device.name,
+      createdAt: device.createdAt,
+      lastSeenAt: device.lastSeenAt,
+      lastIp: device.lastIp
+    }))
   };
 }
 
@@ -562,6 +590,191 @@ async function createGithubIssue({ repoFullName, title, body = "", assignSelf = 
   return normalized;
 }
 
+function parseRepoPair(owner, repo) {
+  const cleanOwner = String(owner || "").trim();
+  const cleanRepo = String(repo || "").trim();
+  if (!/^[A-Za-z0-9_.-]+$/.test(cleanOwner) || !/^[A-Za-z0-9_.-]+$/.test(cleanRepo)) {
+    const error = new Error("Invalid GitHub repository.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return { owner: cleanOwner, repo: cleanRepo };
+}
+
+function findSessionForPr({ owner, repo, number, branch }) {
+  const repoFullName = `${owner}/${repo}`;
+  const candidates = [...sessions.values()].reverse();
+  return candidates.find((session) => {
+    if (branch && session.branch?.name === branch && session.branch?.repo === repoFullName) return true;
+    return (session.events || []).some((event) =>
+      event.type === "branch" &&
+      event.kind === "pr_ready" &&
+      event.prNumber === number &&
+      event.repo === repoFullName
+    );
+  }) || null;
+}
+
+function parsePrHandoff(body) {
+  const text = String(body || "");
+  const section = (title) => {
+    const pattern = new RegExp(`## ${title}\\n([\\s\\S]*?)(?=\\n## |\\n---|$)`, "i");
+    return (text.match(pattern)?.[1] || "").trim();
+  };
+  const list = (value) => value
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[-*]\s*/, "").trim())
+    .filter((line) => line && !/^_none/i.test(line));
+  const confidenceText = section("Confidence");
+  return {
+    tldr: section("What I did"),
+    why: section("Why"),
+    approach: section("Approach"),
+    files_changed: list(section("Files changed(?: \\([^)]*\\))?")),
+    verify: list(section("I want you to double-check")),
+    tests_run: list(section("Verified")),
+    tests_not_run: list(section("Not verified")),
+    confidence: confidenceText ? Number(confidenceText.replace(/[^0-9.]/g, "")) / 100 : null
+  };
+}
+
+function normalizeCheckState({ pr, combinedStatus, checkRuns }) {
+  const states = [];
+  if (combinedStatus?.state) states.push(combinedStatus.state);
+  for (const run of checkRuns?.check_runs || []) {
+    states.push(run.conclusion || run.status);
+  }
+  if (!states.length) return "unknown";
+  if (states.some((state) => ["failure", "error", "cancelled", "timed_out", "action_required"].includes(state))) return "failing";
+  if (states.some((state) => ["pending", "queued", "in_progress", "waiting", "requested"].includes(state))) return "pending";
+  if (states.every((state) => ["success", "neutral", "skipped", "completed"].includes(state))) return "passing";
+  return pr.mergeable_state || "unknown";
+}
+
+async function fetchPullRequestDetail(owner, repo, number) {
+  const token = getGithubAccessToken();
+  if (!token) {
+    const error = new Error("GitHub is not connected.");
+    error.statusCode = 401;
+    throw error;
+  }
+  const safe = parseRepoPair(owner, repo);
+  const prNumber = Number(number);
+  if (!Number.isInteger(prNumber) || prNumber <= 0) {
+    const error = new Error("Invalid pull request number.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const repoPath = `/repos/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.repo)}`;
+  const [pr, files, reviews] = await Promise.all([
+    githubApiRequest("GET", `${repoPath}/pulls/${prNumber}`, token),
+    githubApiRequest("GET", `${repoPath}/pulls/${prNumber}/files?per_page=100`, token),
+    githubApiRequest("GET", `${repoPath}/pulls/${prNumber}/reviews?per_page=50`, token)
+  ]);
+  const [combinedStatus, checkRuns] = await Promise.all([
+    githubApiRequest("GET", `${repoPath}/commits/${encodeURIComponent(pr.head.sha)}/status`, token).catch(() => null),
+    githubApiRequest("GET", `${repoPath}/commits/${encodeURIComponent(pr.head.sha)}/check-runs?per_page=50`, token).catch(() => null)
+  ]);
+  const session = findSessionForPr({ owner: safe.owner, repo: safe.repo, number: prNumber, branch: pr.head.ref });
+  const handoff = session?.handoff || parsePrHandoff(pr.body || "");
+  return {
+    repo: `${safe.owner}/${safe.repo}`,
+    owner: safe.owner,
+    repoName: safe.repo,
+    number: pr.number,
+    title: pr.title,
+    body: pr.body || "",
+    url: pr.html_url,
+    state: pr.state,
+    draft: !!pr.draft,
+    merged: !!pr.merged,
+    mergeable: pr.mergeable,
+    mergeableState: pr.mergeable_state || null,
+    author: pr.user?.login || null,
+    base: { ref: pr.base.ref, sha: pr.base.sha },
+    head: { ref: pr.head.ref, sha: pr.head.sha },
+    additions: pr.additions,
+    deletions: pr.deletions,
+    changedFiles: pr.changed_files,
+    checkState: normalizeCheckState({ pr, combinedStatus, checkRuns }),
+    checks: {
+      combinedState: combinedStatus?.state || null,
+      runs: (checkRuns?.check_runs || []).map((run) => ({
+        id: run.id,
+        name: run.name,
+        status: run.status,
+        conclusion: run.conclusion,
+        url: run.html_url
+      }))
+    },
+    files: (files || []).map((file) => ({
+      filename: file.filename,
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+      changes: file.changes,
+      patch: file.patch || "",
+      blobUrl: file.blob_url
+    })),
+    reviews: (reviews || []).map((review) => ({
+      id: review.id,
+      user: review.user?.login || null,
+      state: review.state,
+      body: review.body || "",
+      submittedAt: review.submitted_at,
+      url: review.html_url
+    })),
+    loupe: {
+      sessionId: session?.id || null,
+      harness: session?.harnessId || null,
+      handoff,
+      deviation: session?.deviation || null
+    }
+  };
+}
+
+async function submitPullRequestReview(owner, repo, number, { event, body }) {
+  const token = getGithubAccessToken();
+  if (!token) {
+    const error = new Error("GitHub is not connected.");
+    error.statusCode = 401;
+    throw error;
+  }
+  const safe = parseRepoPair(owner, repo);
+  return githubApiRequest("POST", `/repos/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.repo)}/pulls/${Number(number)}/reviews`, token, {
+    event,
+    body: body || ""
+  });
+}
+
+async function mergePullRequest(owner, repo, number, { commitTitle, commitMessage } = {}) {
+  const token = getGithubAccessToken();
+  if (!token) {
+    const error = new Error("GitHub is not connected.");
+    error.statusCode = 401;
+    throw error;
+  }
+  const safe = parseRepoPair(owner, repo);
+  return githubApiRequest("PUT", `/repos/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.repo)}/pulls/${Number(number)}/merge`, token, {
+    merge_method: "squash",
+    ...(commitTitle ? { commit_title: commitTitle } : {}),
+    ...(commitMessage ? { commit_message: commitMessage } : {})
+  });
+}
+
+async function closePullRequest(owner, repo, number) {
+  const token = getGithubAccessToken();
+  if (!token) {
+    const error = new Error("GitHub is not connected.");
+    error.statusCode = 401;
+    throw error;
+  }
+  const safe = parseRepoPair(owner, repo);
+  return githubApiRequest("PATCH", `/repos/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.repo)}/pulls/${Number(number)}`, token, {
+    state: "closed"
+  });
+}
+
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -767,12 +980,17 @@ function listFolders(dirPath) {
 }
 
 function sendJson(res, status, payload) {
+  if (res.writableEnded) return;
   let body;
   try {
     body = JSON.stringify(payload);
   } catch (error) {
     status = 500;
     body = JSON.stringify({ ok: false, error: `Response could not be serialized: ${error.message}` });
+  }
+  if (res.headersSent) {
+    res.end(body);
+    return;
   }
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
@@ -802,7 +1020,15 @@ function requestAuthToken(req, url) {
 
 function isAuthorized(req, url) {
   const token = requestAuthToken(req, url);
-  return !!config.apiToken && token === config.apiToken;
+  if (!token) return false;
+  if (config.apiToken && token === config.apiToken) return true;
+  const tokenHash = hashToken(token);
+  const device = (config.devices || []).find((item) => item.tokenHash === tokenHash && !item.revokedAt);
+  if (!device) return false;
+  device.lastSeenAt = new Date().toISOString();
+  device.lastIp = getClientIp(req).replace(/^::ffff:/, "");
+  saveConfig();
+  return true;
 }
 
 function getClientIp(req) {
@@ -1259,21 +1485,79 @@ function blueprintCachePath(ticket, workspace) {
   return path.join(BLUEPRINT_CACHE_DIR, `${repoName}.${ticketHash(ticket)}.${safeCacheName(repoHeadSha(workspace))}.json`);
 }
 
+function blueprintCachePrefix(ticket, workspace) {
+  const binding = workspaceRepoBinding(workspace);
+  const repoName = safeCacheName(ticket.repo || (binding ? `${binding.owner}-${binding.repo}` : workspace.name));
+  return `${repoName}.${ticketHash(ticket)}.`;
+}
+
+function readBlueprintCacheFile(filePath, ticket, workspace, { stale = false } = {}) {
+  const cached = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  const blueprint = normalizeBlueprint(cached, ticket, workspace, cached.provider || cached._provider || "cache", {
+    cached: true,
+    cachePath: filePath,
+    repoSha: cached.repoSha || cached._repo_sha,
+    ticketHash: cached.ticketHash || cached._ticket_hash,
+    costUsd: cached.costUsd ?? cached._cost_usd,
+    durationMs: cached.durationMs ?? cached._duration_ms,
+    model: cached.model || cached._model
+  });
+  if (stale) {
+    blueprint.stale = true;
+    blueprint.staleReason = "Repo HEAD changed since this Blueprint was generated.";
+  }
+  return blueprint;
+}
+
+function publicBlueprint(blueprint) {
+  if (!blueprint) return null;
+  return {
+    id: blueprint.id,
+    createdAt: blueprint.createdAt,
+    outcome: blueprint.outcome,
+    missingInfo: blueprint.missingInfo || [],
+    summary: blueprint.summary,
+    size: blueprint.size,
+    files: blueprint.files || [],
+    deps: blueprint.deps || [],
+    migrations: blueprint.migrations || [],
+    riskAreas: blueprint.riskAreas || [],
+    outOfScope: blueprint.outOfScope || [],
+    openQuestions: blueprint.openQuestions || [],
+    defaultAgent: blueprint.defaultAgent || null,
+    blueprintConfidence: blueprint.blueprintConfidence ?? blueprint.confidence ?? null,
+    provider: blueprint.provider,
+    cached: !!blueprint.cached,
+    stale: !!blueprint.stale,
+    staleReason: blueprint.staleReason || null,
+    repoSha: blueprint.repoSha || null,
+    ticketHash: blueprint.ticketHash || null,
+    likelyFiles: blueprint.likelyFiles || (blueprint.files || []).map((file) => file.path).filter(Boolean),
+    risks: blueprint.risks || [],
+    tests: blueprint.tests || [],
+    confidence: blueprint.confidence ?? blueprint.blueprintConfidence ?? null
+  };
+}
+
 function readCachedBlueprintForTicket(ticket, workspace) {
+  const exactPath = blueprintCachePath(ticket, workspace);
   try {
-    const cachePath = blueprintCachePath(ticket, workspace);
-    const cached = JSON.parse(fs.readFileSync(cachePath, "utf8"));
-    return publicBlueprint(normalizeBlueprint(cached, ticket, workspace, cached.provider || cached._provider || "cache", {
-      cached: true,
-      cachePath,
-      repoSha: cached.repoSha || cached._repo_sha,
-      ticketHash: cached.ticketHash || cached._ticket_hash,
-      costUsd: cached.costUsd ?? cached._cost_usd,
-      durationMs: cached.durationMs ?? cached._duration_ms,
-      model: cached.model || cached._model
-    }));
+    return publicBlueprint(readBlueprintCacheFile(exactPath, ticket, workspace));
   } catch {
-    return { status: "not_started" };
+    try {
+      const prefix = blueprintCachePrefix(ticket, workspace);
+      const candidates = fs.readdirSync(BLUEPRINT_CACHE_DIR)
+        .filter((name) => name.startsWith(prefix) && name.endsWith(".json"))
+        .map((name) => {
+          const filePath = path.join(BLUEPRINT_CACHE_DIR, name);
+          return { filePath, mtimeMs: fs.statSync(filePath).mtimeMs };
+        })
+        .sort((a, b) => b.mtimeMs - a.mtimeMs);
+      if (candidates.length) {
+        return publicBlueprint(readBlueprintCacheFile(candidates[0].filePath, ticket, workspace, { stale: true }));
+      }
+    } catch {}
+    return null;
   }
 }
 
@@ -2111,6 +2395,43 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && url.pathname === "/api/v1/pairing/devices") {
+    ensureDeviceRegistry();
+    sendJson(res, 200, { ok: true, data: configSummary().devices });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/v1/pairing/rotate") {
+    const now = new Date().toISOString();
+    for (const device of config.devices || []) {
+      device.revokedAt = device.revokedAt || now;
+    }
+    config.apiToken = createSecretToken();
+    config.devices = [{
+      id: `device-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      name: "Rotated pairing token",
+      tokenHash: hashToken(config.apiToken),
+      createdAt: now,
+      lastSeenAt: null,
+      lastIp: null,
+      revokedAt: null
+    }];
+    saveConfig();
+    sendJson(res, 200, { ok: true, data: { tokenPreview: tokenPreview(config.apiToken), pairingUrls: getPairingUrls() } });
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname.match(/^\/api\/v1\/pairing\/devices\/[^/]+$/)) {
+    const id = decodeURIComponent(url.pathname.split("/").pop() || "");
+    const device = (config.devices || []).find((item) => item.id === id);
+    if (device) {
+      device.revokedAt = new Date().toISOString();
+      saveConfig();
+    }
+    sendJson(res, 200, { ok: true, data: configSummary().devices });
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/health") {
     sendJson(res, 200, {
       ok: true,
@@ -2131,6 +2452,90 @@ const server = http.createServer(async (req, res) => {
       recentRequests,
       config: configSummary()
     });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/v1/inbox") {
+    try {
+      const token = getGithubAccessToken();
+      if (!token) {
+        sendJson(res, 401, { ok: false, error: { code: "GITHUB_AUTH_REQUIRED", message: "Connect GitHub first.", retryable: false } });
+        return;
+      }
+      const payload = await fetchGithubInbox(token);
+      inboxCache.fetchedAt = Date.now();
+      inboxCache.payload = payload;
+      sendJson(res, 200, { ok: true, data: payload, error: null });
+    } catch (error) {
+      sendJson(res, error.statusCode || 500, { ok: false, data: null, error: { code: "INBOX_FAILED", message: error.message, retryable: true } });
+    }
+    return;
+  }
+
+  const prDetailMatch = url.pathname.match(/^\/api\/v1\/prs\/([^/]+)\/([^/]+)\/(\d+)$/);
+  if (req.method === "GET" && prDetailMatch) {
+    try {
+      const pr = await fetchPullRequestDetail(decodeURIComponent(prDetailMatch[1]), decodeURIComponent(prDetailMatch[2]), prDetailMatch[3]);
+      sendJson(res, 200, { ok: true, data: pr, error: null });
+    } catch (error) {
+      sendJson(res, error.statusCode || 500, { ok: false, data: null, error: { code: "PR_DETAIL_FAILED", message: error.message, retryable: true } });
+    }
+    return;
+  }
+
+  const prActionMatch = url.pathname.match(/^\/api\/v1\/prs\/([^/]+)\/([^/]+)\/(\d+)\/(review|merge|reject)$/);
+  if (req.method === "POST" && prActionMatch) {
+    try {
+      const owner = decodeURIComponent(prActionMatch[1]);
+      const repo = decodeURIComponent(prActionMatch[2]);
+      const number = Number(prActionMatch[3]);
+      const action = prActionMatch[4];
+      const body = JSON.parse(await readBody(req) || "{}");
+      if (action === "review") {
+        const event = body.event === "REQUEST_CHANGES" ? "REQUEST_CHANGES" : "APPROVE";
+        const review = await submitPullRequestReview(owner, repo, number, { event, body: body.body || (event === "APPROVE" ? "Approved from Loupe." : "Changes requested from Loupe.") });
+        sendJson(res, 200, { ok: true, data: { review }, error: null });
+        return;
+      }
+      if (action === "merge") {
+        const result = await mergePullRequest(owner, repo, number, {
+          commitTitle: body.commitTitle,
+          commitMessage: body.commitMessage
+        });
+        sendJson(res, 200, { ok: true, data: result, error: null });
+        return;
+      }
+      const reason = String(body.reason || "").trim();
+      if (!reason) {
+        sendJson(res, 400, { ok: false, data: null, error: { code: "REJECT_REASON_REQUIRED", message: "Reject requires a reason.", retryable: false } });
+        return;
+      }
+      const review = await submitPullRequestReview(owner, repo, number, { event: "REQUEST_CHANGES", body: reason });
+      const closed = body.close === false ? null : await closePullRequest(owner, repo, number);
+      sendJson(res, 200, { ok: true, data: { review, closed }, error: null });
+    } catch (error) {
+      sendJson(res, error.statusCode || 500, { ok: false, data: null, error: { code: "PR_ACTION_FAILED", message: error.message, retryable: true } });
+    }
+    return;
+  }
+
+  const sendBackMatch = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/send-back$/);
+  if (req.method === "POST" && sendBackMatch) {
+    try {
+      const id = decodeURIComponent(sendBackMatch[1]);
+      const body = JSON.parse(await readBody(req) || "{}");
+      const feedback = String(body.feedback || "").trim();
+      if (!feedback) {
+        sendJson(res, 400, { ok: false, data: null, error: { code: "FEEDBACK_REQUIRED", message: "Send back requires feedback.", retryable: false } });
+        return;
+      }
+      const prLabel = body.pr ? `${body.pr.repo || ""}#${body.pr.number || ""}` : "this PR";
+      const prompt = `Reviewer feedback for ${prLabel}:\n\n${feedback}\n\nUse the existing branch. Make only the requested changes. Update the HANDOFF JSON at the end. Do not merge or close the PR.`;
+      const session = continueSession(id, prompt);
+      sendJson(res, 200, { ok: true, data: { sessionId: session.id, status: session.status }, error: null });
+    } catch (error) {
+      sendJson(res, error.statusCode || 500, { ok: false, data: null, error: { code: "SEND_BACK_FAILED", message: error.message, retryable: true } });
+    }
     return;
   }
 

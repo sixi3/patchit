@@ -666,6 +666,11 @@
       font: inherit;
     }
 
+    .inbox-card.expanded {
+      border-color: rgba(242, 204, 96, 0.42);
+      background: #14120b;
+    }
+
     .inbox-card:hover { border-color: var(--line-hot); }
     .inbox-card[disabled] { opacity: 0.55; cursor: not-allowed; }
 
@@ -717,6 +722,146 @@
       display: flex;
       gap: 8px;
       align-items: center;
+    }
+
+    .blueprint-drawer {
+      display: grid;
+      gap: 9px;
+      margin-top: 4px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+    }
+
+    .blueprint-summary {
+      color: #dfe5ed;
+      font-size: 13px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .blueprint-sections {
+      display: grid;
+      gap: 7px;
+    }
+
+    .blueprint-section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.02);
+      overflow: hidden;
+    }
+
+    .blueprint-section summary {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 34px;
+      padding: 9px 10px;
+      cursor: pointer;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 11px;
+      list-style: none;
+    }
+
+    .blueprint-section summary::-webkit-details-marker { display: none; }
+
+    .blueprint-section summary::after {
+      content: "+";
+      color: var(--muted);
+    }
+
+    .blueprint-section[open] summary::after { content: "-"; }
+
+    .blueprint-section ul {
+      margin: 0;
+      padding: 0 10px 10px 24px;
+      color: #dfe5ed;
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .blueprint-action-row {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .blueprint-action-row .mini-btn {
+      min-height: 34px;
+    }
+
+    .pr-review-body {
+      min-height: 0;
+      overflow-y: auto;
+      padding: 14px;
+      display: grid;
+      align-content: start;
+      gap: 10px;
+      scrollbar-width: thin;
+    }
+
+    .pr-panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 12px;
+      display: grid;
+      gap: 9px;
+    }
+
+    .pr-panel h3 {
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .pr-actions {
+      position: sticky;
+      bottom: 0;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      border-top: 1px solid var(--line);
+      background: rgba(8, 9, 11, 0.96);
+      padding: 10px 14px 14px;
+    }
+
+    .pr-file {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .pr-file summary {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px;
+      cursor: pointer;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 11px;
+      list-style: none;
+    }
+
+    .pr-file summary::-webkit-details-marker { display: none; }
+
+    .pr-diff {
+      margin: 0;
+      padding: 10px;
+      max-height: 280px;
+      overflow: auto;
+      border-top: 1px solid var(--line);
+      color: #dfe5ed;
+      font-family: var(--mono);
+      font-size: 10px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
 
     .inbox-connect {
@@ -1206,6 +1351,26 @@
     <main class="session-body" id="planBody"></main>
   </section>
 
+  <section class="session-view" id="prReviewView" hidden>
+    <header class="session-header">
+      <div class="session-header-top">
+        <button class="back-btn" id="closePrReview" type="button">back</button>
+        <div class="session-heading">
+          <h2 id="prReviewTitle">PR Review</h2>
+          <p class="session-meta" id="prReviewSubtitle">Load a pull request to review.</p>
+        </div>
+        <span class="status-chip" id="prReviewStatus">idle</span>
+      </div>
+    </header>
+    <main class="pr-review-body" id="prReviewBody"></main>
+    <footer class="pr-actions" id="prReviewActions" hidden>
+      <button class="mini-btn" id="sendBackPr" type="button">send back</button>
+      <button class="mini-btn" id="rejectPr" type="button">reject</button>
+      <button class="mini-btn" id="approvePr" type="button">approve</button>
+      <button class="mini-btn primary" id="mergePr" type="button">merge</button>
+    </footer>
+  </section>
+
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script>
@@ -1245,9 +1410,10 @@
       fsPath: null,
       fsListing: null,
       githubOAuth: { loading: false, flowId: null, userCode: null, verificationUri: null, interval: 5, error: null, timer: null },
-      inbox: { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null },
+      inbox: { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null, expandedTicketId: null },
       issueDraft: { open: false, loading: false, error: null, repo: "", title: "", body: "", assignSelf: true },
-      plan: { loading: false, ticket: null, plan: null, error: null }
+      plan: { loading: false, ticket: null, plan: null, error: null },
+      prReview: { loading: false, pr: null, error: null, source: null }
     };
 
     const $ = (selector) => document.querySelector(selector);
@@ -1490,6 +1656,7 @@
                 <div class="item-head"><span>${escapeHtml(item.label)}</span><span>${escapeHtml(item.at)}</span></div>
                 <div class="item-body">${escapeHtml(item.body)}</div>
                 <a class="pr-link" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">open PR draft on GitHub ↗</a>
+                <button class="mini-btn" type="button" data-open-pr-url="${escapeHtml(item.url)}">review in Loupe</button>
               </article>
             `;
           }
@@ -2005,6 +2172,10 @@
     });
 
     $("#closeSession").addEventListener("click", closeSession);
+    $("#sessionBody").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-open-pr-url]");
+      if (button) openPrReview({ url: button.dataset.openPrUrl });
+    });
 
     document.querySelectorAll("[data-session-tab]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -2087,6 +2258,202 @@
     function closeInbox() { $("#inboxView").hidden = true; }
 
     function closePlan() { $("#planView").hidden = true; }
+
+    function closePrReview() { $("#prReviewView").hidden = true; }
+
+    function parseRepoFullName(repo) {
+      const [owner, name] = String(repo || "").split("/");
+      return { owner, repo: name };
+    }
+
+    function parsePrUrl(url) {
+      try {
+        const parsed = new URL(url);
+        const parts = parsed.pathname.split("/").filter(Boolean);
+        const pullsIndex = parts.indexOf("pull");
+        if (parsed.hostname !== "github.com" || pullsIndex < 2) return null;
+        return { owner: parts[0], repo: parts[1], number: Number(parts[pullsIndex + 1]) };
+      } catch {
+        return null;
+      }
+    }
+
+    function prPath(pr) {
+      return `/api/v1/prs/${encodeURIComponent(pr.owner)}/${encodeURIComponent(pr.repoName || pr.repo)}/${encodeURIComponent(pr.number)}`;
+    }
+
+    function prList(title, items, emptyText) {
+      const list = (items || []).length
+        ? items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
+        : `<li>${escapeHtml(emptyText)}</li>`;
+      return `<ul>${list}</ul>`;
+    }
+
+    function renderPrReview() {
+      const { loading, pr, error } = state.prReview;
+      $("#prReviewView").hidden = false;
+      $("#prReviewActions").hidden = loading || !!error || !pr;
+      $("#prReviewTitle").textContent = pr ? `${pr.repo}#${pr.number}` : "PR Review";
+      $("#prReviewSubtitle").textContent = pr?.title || "Review, send back, approve, reject, or merge.";
+      $("#prReviewStatus").textContent = loading ? "loading" : error ? "failed" : pr ? (pr.merged ? "merged" : pr.state) : "idle";
+      $("#mergePr").disabled = !pr || pr.merged || pr.state !== "open" || pr.checkState === "failing";
+      $("#sendBackPr").disabled = !pr?.loupe?.sessionId;
+
+      if (loading) {
+        $("#prReviewBody").innerHTML = `<div class="empty">Loading PR from GitHub...</div>`;
+        return;
+      }
+      if (error) {
+        $("#prReviewBody").innerHTML = `<div class="empty">${escapeHtml(error)}</div>`;
+        return;
+      }
+      if (!pr) {
+        $("#prReviewBody").innerHTML = `<div class="empty">No pull request selected.</div>`;
+        return;
+      }
+      const handoff = pr.loupe?.handoff || {};
+      const files = pr.files || [];
+      $("#prReviewBody").innerHTML = `
+        <article class="pr-panel">
+          <div class="inbox-card-meta">
+            <span class="inbox-tag review">${escapeHtml(pr.draft ? "draft" : pr.state)}</span>
+            <span class="inbox-tag ${pr.checkState === "failing" ? "nobind" : "bind"}">${escapeHtml(pr.checkState || "checks unknown")}</span>
+            <span class="inbox-tag">${escapeHtml(pr.head?.ref || "head")}</span>
+            <span class="inbox-tag">${escapeHtml(`+${pr.additions || 0} -${pr.deletions || 0}`)}</span>
+          </div>
+          <h3>${escapeHtml(pr.title)}</h3>
+          <div class="blueprint-summary">${escapeHtml(handoff.tldr || pr.body?.slice(0, 400) || "No Loupe handoff found.")}</div>
+          ${handoff.files_changed?.length ? `<div class="item-body">${prList("files", handoff.files_changed, "")}</div>` : ""}
+          ${handoff.tests_run?.length ? `<div class="item-body"><strong>Verified</strong>${prList("verified", handoff.tests_run, "")}</div>` : ""}
+          ${handoff.risks?.length ? `<div class="item-body"><strong>Risks</strong>${prList("risks", handoff.risks, "")}</div>` : ""}
+        </article>
+        <article class="pr-panel">
+          <h3>Changed files · ${files.length}</h3>
+          ${files.length ? files.map((file, index) => `
+            <details class="pr-file" ${index === 0 ? "open" : ""}>
+              <summary><span>${escapeHtml(file.filename)}</span><span>${escapeHtml(`+${file.additions} -${file.deletions}`)}</span></summary>
+              <pre class="pr-diff">${escapeHtml(file.patch || "No patch available from GitHub.")}</pre>
+            </details>
+          `).join("") : `<div class="empty">No changed files returned by GitHub.</div>`}
+        </article>
+        <article class="pr-panel">
+          <h3>Reviews</h3>
+          ${pr.reviews?.length ? pr.reviews.slice(-6).map((review) => `
+            <div class="item-body">${escapeHtml(review.user || "reviewer")} · ${escapeHtml(review.state || "")}${review.body ? `\n${escapeHtml(review.body)}` : ""}</div>
+          `).join("") : `<div class="item-body">No reviews yet.</div>`}
+        </article>
+      `;
+    }
+
+    async function openPrReview(source) {
+      const parsed = source.owner
+        ? source
+        : source.repo && source.number
+          ? { ...parseRepoFullName(source.repo), number: source.number }
+          : parsePrUrl(source.url);
+      if (!parsed?.owner || !parsed?.repo || !parsed.number) {
+        toast("Could not identify this pull request.");
+        return;
+      }
+      state.prReview = { loading: true, pr: null, error: null, source };
+      renderPrReview();
+      try {
+        const response = await apiFetch(`/api/v1/prs/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.repo)}/${encodeURIComponent(parsed.number)}`, { cache: "no-store" });
+        const data = await readApiJson(response, "Could not load PR");
+        if (!response.ok || !data.ok) throw new Error(data.error?.message || data.error || "Could not load PR");
+        state.prReview = { loading: false, pr: data.data, error: null, source };
+      } catch (error) {
+        state.prReview = { loading: false, pr: null, error: error.message, source };
+      }
+      renderPrReview();
+    }
+
+    async function refreshCurrentPr() {
+      const pr = state.prReview.pr;
+      if (!pr) return;
+      await openPrReview({ owner: pr.owner, repo: pr.repoName, number: pr.number });
+    }
+
+    async function postPrAction(action, payload = {}) {
+      const pr = state.prReview.pr;
+      if (!pr) return null;
+      const response = await apiFetch(`${prPath(pr)}/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await readApiJson(response, `Could not ${action} PR`);
+      if (!response.ok || !data.ok) throw new Error(data.error?.message || data.error || `Could not ${action} PR`);
+      return data.data;
+    }
+
+    async function approveCurrentPr() {
+      try {
+        await postPrAction("review", { event: "APPROVE", body: "Approved from Loupe." });
+        toast("PR approved.");
+        await refreshCurrentPr();
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+
+    async function mergeCurrentPr() {
+      const pr = state.prReview.pr;
+      if (!pr) return;
+      if (!window.confirm(`Squash merge ${pr.repo}#${pr.number} into ${pr.base?.ref || "base"}?`)) return;
+      try {
+        await postPrAction("merge", {
+          commitTitle: pr.title,
+          commitMessage: `${pr.loupe?.handoff?.tldr || "Merged from Loupe."}\n\nLoupe PR ${pr.repo}#${pr.number}`
+        });
+        toast("PR merged.");
+        await refreshCurrentPr();
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+
+    async function rejectCurrentPr() {
+      const reason = window.prompt("Why reject/request changes?");
+      if (!reason?.trim()) return;
+      const close = window.confirm("Close this PR after requesting changes?");
+      try {
+        await postPrAction("reject", { reason: reason.trim(), close });
+        toast(close ? "PR rejected and closed." : "Changes requested.");
+        await refreshCurrentPr();
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+
+    async function sendBackCurrentPr() {
+      const pr = state.prReview.pr;
+      if (!pr?.loupe?.sessionId) {
+        toast("No Loupe session is linked to this PR.");
+        return;
+      }
+      const feedback = window.prompt("Send feedback back to the agent:");
+      if (!feedback?.trim()) return;
+      try {
+        const response = await apiFetch(`/api/v1/sessions/${encodeURIComponent(pr.loupe.sessionId)}/send-back`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ feedback: feedback.trim(), pr: { repo: pr.repo, number: pr.number } })
+        });
+        const data = await readApiJson(response, "Could not send feedback");
+        if (!response.ok || !data.ok) throw new Error(data.error?.message || data.error || "Could not send feedback");
+        toast("Sent back to agent.");
+        closePrReview();
+        const session = state.sessions.find((item) => item.remoteId === pr.loupe.sessionId || item.localId === pr.loupe.sessionId);
+        if (session) openSession(session.localId);
+      } catch (error) {
+        toast(error.message);
+      }
+    }
+
+    function listCount(items) {
+      return Array.isArray(items) ? items.length : 0;
+    }
 
     function planList(title, items, emptyText) {
       const list = (items || []).length
@@ -2296,7 +2663,7 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
         const response = await apiFetch(url, { cache: "no-store" });
         const data = await response.json();
         if (response.status === 400 && /token|not connected/i.test(data.error || "")) {
-          state.inbox = { ...state.inbox, loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null };
+          state.inbox = { ...state.inbox, loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null, expandedTicketId: null };
           renderInbox(); renderInboxBadge();
           return;
         }
@@ -2308,7 +2675,8 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
           assigned: data.assigned || [],
           reviews: data.reviews || [],
           error: null,
-          fetchedAt: data.fetchedAt
+          fetchedAt: data.fetchedAt,
+          expandedTicketId: state.inbox.expandedTicketId
         };
       } catch (error) {
         state.inbox.loading = false;
@@ -2399,7 +2767,7 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
         if (!response.ok || !data.ok) throw new Error(data.error || "Could not disconnect GitHub");
         clearGithubOAuthTimer();
         state.githubOAuth = { loading: false, flowId: null, userCode: null, verificationUri: null, interval: 5, error: null, timer: null };
-        state.inbox = { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null };
+        state.inbox = { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null, expandedTicketId: null };
         state.issueDraft = { open: false, loading: false, error: null, repo: "", title: "", body: "", assignSelf: true };
         renderInbox(); renderInboxBadge();
         toast("GitHub disconnected.");
@@ -2410,10 +2778,8 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
 
     function dispatchTicket(ticket) {
       if (ticket.kind === "review") {
-        $("#messageInput").value = ticketPrompt(ticket, null);
-        setDispatchContext(ticket, null);
         closeInbox();
-        toast(`Loaded ${ticket.repo}#${ticket.number} for review.`);
+        openPrReview(ticket);
         return;
       }
       createPlanForTicket(ticket);
@@ -2472,9 +2838,9 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
               <button type="submit" class="mini-btn primary" ${state.issueDraft.loading || !repos.length ? "disabled" : ""}>${state.issueDraft.loading ? "creating..." : "create issue"}</button>
             </div>
           </form>
-        </div>
-      `;
-    }
+	        </div>
+	      `;
+	    }
 
     async function submitIssueDraft(event) {
       event.preventDefault();
@@ -2515,10 +2881,110 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
       }
     }
 
+    function blueprintFileLabel(file) {
+      if (typeof file === "string") return file;
+      return `${file.path || "unknown"}${file.is_new ? " (new)" : ""}${file.why ? ` - ${file.why}` : ""}`;
+    }
+
+    function blueprintDepLabel(dep) {
+      if (typeof dep === "string") return dep;
+      return `${dep.name || "dependency"}${dep.ecosystem ? ` (${dep.ecosystem})` : ""}${dep.reason ? ` - ${dep.reason}` : ""}`;
+    }
+
+    function blueprintMigrationLabel(migration) {
+      if (typeof migration === "string") return migration;
+      return `${migration.kind || "schema"} / ${migration.risk || "medium"}${migration.purpose ? ` - ${migration.purpose}` : ""}`;
+    }
+
+    function isUsableBlueprint(blueprint) {
+      return !!blueprint && blueprint.status !== "not_started" && !!blueprint.outcome;
+    }
+
+    function blueprintSection(title, items, formatter, emptyText, open = false) {
+      const normalized = (items || []).map(formatter).filter(Boolean);
+      const list = normalized.length
+        ? normalized.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
+        : `<li>${escapeHtml(emptyText)}</li>`;
+      return `
+        <details class="blueprint-section" ${open ? "open" : ""}>
+          <summary><span>${escapeHtml(title)}</span><span>${normalized.length || 0}</span></summary>
+          <ul>${list}</ul>
+        </details>
+      `;
+    }
+
+    function renderBlueprintDrawer(ticket) {
+      const blueprint = ticket.blueprint;
+      if (!isUsableBlueprint(blueprint)) {
+        return `
+          <div class="blueprint-drawer">
+            <div class="inbox-card-meta">
+              <span class="inbox-tag">blueprint on tap</span>
+            </div>
+            <div class="blueprint-summary">No cached Blueprint is available for this ticket yet.</div>
+            <div class="blueprint-action-row">
+              <button type="button" class="mini-btn primary" data-inbox-action="build">build Blueprint</button>
+            </div>
+          </div>
+        `;
+      }
+
+      const blocked = blueprint.outcome === "needs_info";
+      const files = blueprint.files || blueprint.likelyFiles || [];
+      const riskAreas = blueprint.riskAreas || blueprint.risks || [];
+      return `
+        <div class="blueprint-drawer">
+          <div class="inbox-card-meta">
+            <span class="inbox-tag ${blocked ? "nobind" : "bind"}">${blocked ? "needs info" : "ready"}</span>
+            <span class="inbox-tag">${escapeHtml(blueprint.size || "M")}</span>
+            ${blueprint.cached ? `<span class="inbox-tag">cached</span>` : ""}
+            ${blueprint.stale ? `<span class="inbox-tag nobind">stale</span>` : ""}
+          </div>
+          <div class="blueprint-summary">${escapeHtml(blueprint.summary || (blocked ? "Ticket needs clarification before dispatch." : "Blueprint is ready for review."))}${blueprint.stale ? `<br><span class="session-meta">${escapeHtml(blueprint.staleReason || "Repo changed since this Blueprint was generated.")}</span>` : ""}</div>
+          <div class="blueprint-sections">
+            ${blocked ? blueprintSection("missing info", blueprint.missingInfo, (item) => item, "No specific gaps returned.", true) : ""}
+            ${blueprintSection("predicted files", files, blueprintFileLabel, "No specific files predicted.", !blocked)}
+            ${blueprintSection("risk areas", riskAreas, (item) => item, "No risk areas surfaced.")}
+            ${blueprintSection("dependencies", blueprint.deps, blueprintDepLabel, "No new dependencies predicted.")}
+            ${blueprintSection("migrations", blueprint.migrations, blueprintMigrationLabel, "No migrations predicted.")}
+            ${blueprintSection("open questions", blueprint.openQuestions, (item) => item, "No open questions.")}
+          </div>
+          <div class="blueprint-action-row">
+            <button type="button" class="mini-btn primary" data-inbox-action="${blocked ? "blocked" : "dispatch"}" ${blocked ? "disabled" : ""}>${blocked ? "needs info" : "dispatch"}</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function previewTicket(ticket) {
+      if (ticket.kind === "review") {
+        dispatchTicket(ticket);
+        return;
+      }
+      const id = String(ticket.id);
+      state.inbox.expandedTicketId = state.inbox.expandedTicketId === id ? null : id;
+      renderInbox();
+    }
+
+    function dispatchBlueprintFromPreview(ticket) {
+      const plan = ticket.blueprint;
+      if (!isUsableBlueprint(plan)) {
+        createPlanForTicket(ticket);
+        return;
+      }
+      if (plan.outcome === "needs_info") {
+        toast("This ticket needs more info before dispatch.");
+        return;
+      }
+      setDispatchContext(ticket, plan);
+      closeInbox();
+      startSession(ticketPrompt(ticket, plan));
+    }
+
     function renderInbox() {
       const subtitle = $("#inboxSubtitle");
       const body = $("#inboxBody");
-      const { loading, connected, viewer, assigned, reviews, error, fetchedAt } = state.inbox;
+      const { loading, connected, viewer, assigned, reviews, error, fetchedAt, expandedTicketId } = state.inbox;
       const newIssueButton = $("#newIssue");
       if (newIssueButton) {
         newIssueButton.disabled = loading || !connected;
@@ -2578,19 +3044,22 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
           : `<span class="inbox-tag nobind">no workspace</span>`;
         const labels = (item.labels || []).slice(0, 3).map((l) => `<span class="inbox-tag">${escapeHtml(l)}</span>`).join("");
         const blueprint = item.blueprint;
-        const blueprintTags = item.kind === "issue" && blueprint
-          ? blueprint.outcome === "needs_info"
-            ? `<span class="inbox-tag nobind">needs info</span>`
-            : blueprint.status === "not_started"
-              ? `<span class="inbox-tag">blueprint on tap</span>`
+        const usableBlueprint = isUsableBlueprint(blueprint);
+        const expanded = String(item.id) === String(expandedTicketId);
+        const blueprintTags = item.kind === "issue"
+          ? usableBlueprint
+            ? blueprint.outcome === "needs_info"
+              ? `<span class="inbox-tag nobind">needs info</span>`
               : `
                 <span class="inbox-tag bind">${escapeHtml(blueprint.size || "M")}</span>
-                <span class="inbox-tag">${escapeHtml(String((blueprint.files || []).length))} files</span>
+                <span class="inbox-tag">${escapeHtml(String(listCount(blueprint.files || blueprint.likelyFiles)))} files</span>
+                ${blueprint.stale ? `<span class="inbox-tag nobind">stale</span>` : ""}
                 ${(blueprint.riskAreas || []).slice(0, 2).map((risk) => `<span class="inbox-tag nobind">${escapeHtml(risk)}</span>`).join("")}
               `
+            : `<span class="inbox-tag">blueprint on tap</span>`
           : "";
         return `
-          <button class="inbox-card" type="button" data-ticket-id="${escapeHtml(String(item.id))}">
+          <article class="inbox-card${expanded ? " expanded" : ""}" role="${expanded && item.kind === "issue" ? "group" : "button"}" tabindex="0" data-ticket-id="${escapeHtml(String(item.id))}" aria-expanded="${expanded ? "true" : "false"}">
             <div class="inbox-card-top">
               <span>${escapeHtml(item.repo)}#${escapeHtml(String(item.number))}</span>
               <span>${escapeHtml(new Date(item.updatedAt).toLocaleString())}</span>
@@ -2602,7 +3071,8 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
               ${labels}
               ${blueprintTags}
             </div>
-          </button>
+            ${expanded && item.kind === "issue" ? renderBlueprintDrawer(item) : ""}
+          </article>
         `;
       };
 
@@ -2651,12 +3121,41 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
     $("#refreshInbox").addEventListener("click", () => loadInbox({ force: true }));
     $("#closePlan").addEventListener("click", closePlan);
     $("#approvePlan").addEventListener("click", approveCurrentPlan);
+    $("#closePrReview").addEventListener("click", closePrReview);
+    $("#sendBackPr").addEventListener("click", sendBackCurrentPr);
+    $("#rejectPr").addEventListener("click", rejectCurrentPr);
+    $("#approvePr").addEventListener("click", approveCurrentPr);
+    $("#mergePr").addEventListener("click", mergeCurrentPr);
     $("#inboxBody").addEventListener("click", (event) => {
       const card = event.target.closest("[data-ticket-id]");
       if (!card) return;
       const id = card.dataset.ticketId;
       const ticket = [...state.inbox.assigned, ...state.inbox.reviews].find((t) => String(t.id) === id);
-      if (ticket) dispatchTicket(ticket);
+      if (!ticket) return;
+      const action = event.target.closest("[data-inbox-action]")?.dataset.inboxAction;
+      if (action === "build") {
+        createPlanForTicket(ticket);
+        return;
+      }
+      if (action === "dispatch") {
+        dispatchBlueprintFromPreview(ticket);
+        return;
+      }
+      if (action === "blocked") {
+        toast("This ticket needs more info before dispatch.");
+        return;
+      }
+      if (event.target.closest(".blueprint-drawer")) return;
+      previewTicket(ticket);
+    });
+    $("#inboxBody").addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const card = event.target.closest("[data-ticket-id]");
+      if (!card || event.target.closest(".blueprint-drawer")) return;
+      event.preventDefault();
+      const id = card.dataset.ticketId;
+      const ticket = [...state.inbox.assigned, ...state.inbox.reviews].find((t) => String(t.id) === id);
+      if (ticket) previewTicket(ticket);
     });
 
     if ("serviceWorker" in navigator) {
