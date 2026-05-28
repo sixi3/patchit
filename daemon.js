@@ -501,6 +501,67 @@ async function fetchGithubInbox(token) {
   };
 }
 
+function normalizeIssuePayload(issue, repoFullName) {
+  return {
+    kind: "issue",
+    id: issue.id,
+    number: issue.number,
+    title: issue.title,
+    body: (issue.body || "").slice(0, 4000),
+    url: issue.html_url,
+    state: issue.state,
+    isPr: false,
+    labels: (issue.labels || []).map((l) => l.name),
+    repo: repoFullName,
+    updatedAt: issue.updated_at,
+    createdAt: issue.created_at,
+    author: issue.user?.login || null,
+    binding: null,
+    blueprint: null
+  };
+}
+
+async function createGithubIssue({ repoFullName, title, body = "", assignSelf = true }) {
+  const token = getGithubAccessToken();
+  if (!token) {
+    const err = new Error("GitHub is not connected. Connect GitHub with OAuth first.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const bindings = listWorkspaceBindings();
+  const binding = bindings.find((item) => `${item.owner}/${item.repo}`.toLowerCase() === String(repoFullName || "").toLowerCase());
+  if (!binding) {
+    const err = new Error("Choose a GitHub repo that is bound to one of your Loupe workspaces.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const cleanTitle = String(title || "").trim();
+  if (!cleanTitle) {
+    const err = new Error("Issue title is required.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const viewerLogin = config.github?.login || config.githubLogin || null;
+  const payload = {
+    title: cleanTitle.slice(0, 256),
+    body: String(body || "").trim()
+  };
+  if (assignSelf && viewerLogin) payload.assignees = [viewerLogin];
+
+  const owner = encodeURIComponent(binding.owner);
+  const repo = encodeURIComponent(binding.repo);
+  const issue = await githubApiRequest("POST", `/repos/${owner}/${repo}/issues`, token, payload);
+  inboxCache.fetchedAt = 0;
+  inboxCache.payload = null;
+
+  const normalized = normalizeIssuePayload(issue, `${binding.owner}/${binding.repo}`);
+  normalized.binding = binding;
+  return normalized;
+}
+
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -706,11 +767,18 @@ function listFolders(dirPath) {
 }
 
 function sendJson(res, status, payload) {
+  let body;
+  try {
+    body = JSON.stringify(payload);
+  } catch (error) {
+    status = 500;
+    body = JSON.stringify({ ok: false, error: `Response could not be serialized: ${error.message}` });
+  }
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": "*"
   });
-  res.end(JSON.stringify(payload));
+  res.end(body);
 }
 
 function isPublicApi(pathname) {
@@ -1195,7 +1263,7 @@ function readCachedBlueprintForTicket(ticket, workspace) {
   try {
     const cachePath = blueprintCachePath(ticket, workspace);
     const cached = JSON.parse(fs.readFileSync(cachePath, "utf8"));
-    return normalizeBlueprint(cached, ticket, workspace, cached.provider || cached._provider || "cache", {
+    return publicBlueprint(normalizeBlueprint(cached, ticket, workspace, cached.provider || cached._provider || "cache", {
       cached: true,
       cachePath,
       repoSha: cached.repoSha || cached._repo_sha,
@@ -1203,7 +1271,7 @@ function readCachedBlueprintForTicket(ticket, workspace) {
       costUsd: cached.costUsd ?? cached._cost_usd,
       durationMs: cached.durationMs ?? cached._duration_ms,
       model: cached.model || cached._model
-    });
+    }));
   } catch {
     return { status: "not_started" };
   }
@@ -1306,6 +1374,27 @@ function normalizeBlueprint(raw, ticket, workspace, providerId, meta = {}) {
     tests: asList(source.tests || source.test_plan || source.testPlan, 8),
     openQuestions: asList(source.open_questions || source.openQuestions || source.questions, 3),
     confidence
+  };
+}
+
+function publicBlueprint(blueprint) {
+  if (!blueprint || blueprint.status === "not_started") return blueprint;
+  const { workspace, ticket, ...rest } = blueprint;
+  return {
+    ...rest,
+    workspace: workspace ? { id: workspace.id, name: workspace.name, path: workspace.path } : null,
+    ticket: ticket ? {
+      kind: ticket.kind,
+      id: ticket.id,
+      number: ticket.number,
+      title: ticket.title,
+      url: ticket.url,
+      repo: ticket.repo,
+      labels: Array.isArray(ticket.labels) ? ticket.labels : [],
+      updatedAt: ticket.updatedAt,
+      createdAt: ticket.createdAt,
+      author: ticket.author || null
+    } : null
   };
 }
 
@@ -2166,7 +2255,8 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const blueprint = await createBlueprint(ticket, body.workspaceId, body.harness, { bypassCache: body.refresh === true });
-      sendJson(res, 200, { ok: true, blueprint, plan: blueprint });
+      const publicPlan = publicBlueprint(blueprint);
+      sendJson(res, 200, { ok: true, blueprint: publicPlan, plan: publicPlan });
     } catch (error) {
       sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
     }
@@ -2214,6 +2304,22 @@ const server = http.createServer(async (req, res) => {
       inboxCache.fetchedAt = Date.now();
       inboxCache.payload = payload;
       sendJson(res, 200, { ok: true, cached: false, ...payload });
+    } catch (error) {
+      sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/github/issues") {
+    try {
+      const body = JSON.parse(await readBody(req) || "{}");
+      const issue = await createGithubIssue({
+        repoFullName: body.repo,
+        title: body.title,
+        body: body.body,
+        assignSelf: body.assignSelf !== false
+      });
+      sendJson(res, 201, { ok: true, issue });
     } catch (error) {
       sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
     }

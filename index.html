@@ -713,6 +713,12 @@
     .inbox-tag.review { color: var(--blue); border-color: rgba(121, 192, 255, 0.35); }
     .inbox-tag.issue { color: var(--yellow); border-color: rgba(242, 204, 96, 0.35); }
 
+    .inbox-header-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
     .inbox-connect {
       border: 1px dashed var(--line-hot);
       border-radius: 10px;
@@ -734,7 +740,33 @@
       line-height: 1.45;
     }
 
-    .inbox-connect input {
+    .issue-draft {
+      border-style: solid;
+    }
+
+    .issue-draft-form {
+      display: grid;
+      gap: 9px;
+    }
+
+    .issue-draft-grid {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: end;
+    }
+
+    .issue-draft label {
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .inbox-connect input,
+    .inbox-connect select,
+    .inbox-connect textarea {
       width: 100%;
       border: 1px solid var(--line-hot);
       background: var(--panel-2);
@@ -743,6 +775,13 @@
       padding: 10px 12px;
       font-family: var(--mono);
       font-size: 12px;
+    }
+
+    .inbox-connect textarea {
+      min-height: 180px;
+      max-height: 360px;
+      resize: vertical;
+      line-height: 1.45;
     }
 
     .inbox-connect-actions {
@@ -1005,7 +1044,8 @@
       }
 
       .composer-inner,
-      .fs-actions {
+      .fs-actions,
+      .issue-draft-grid {
         grid-template-columns: 1fr;
       }
 
@@ -1135,15 +1175,18 @@
           <h2 id="inboxTitle">Inbox</h2>
           <p class="session-meta" id="inboxSubtitle">Connect GitHub to see what's assigned to you.</p>
         </div>
-        <button class="back-btn" id="refreshInbox" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 12a9 9 0 0 1-15.3 6.4L3 16"></path>
-            <path d="M3 21v-5h5"></path>
-            <path d="M3 12a9 9 0 0 1 15.3-6.4L21 8"></path>
-            <path d="M21 3v5h-5"></path>
-          </svg>
-          refresh
-        </button>
+        <div class="inbox-header-actions">
+          <button class="back-btn" id="newIssue" type="button">new issue</button>
+          <button class="back-btn" id="refreshInbox" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12a9 9 0 0 1-15.3 6.4L3 16"></path>
+              <path d="M3 21v-5h5"></path>
+              <path d="M3 12a9 9 0 0 1 15.3-6.4L21 8"></path>
+              <path d="M21 3v5h-5"></path>
+            </svg>
+            refresh
+          </button>
+        </div>
       </div>
     </header>
     <main class="inbox-body" id="inboxBody"></main>
@@ -1203,6 +1246,7 @@
       fsListing: null,
       githubOAuth: { loading: false, flowId: null, userCode: null, verificationUri: null, interval: 5, error: null, timer: null },
       inbox: { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null },
+      issueDraft: { open: false, loading: false, error: null, repo: "", title: "", body: "", assignSelf: true },
       plan: { loading: false, ticket: null, plan: null, error: null }
     };
 
@@ -2356,6 +2400,7 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
         clearGithubOAuthTimer();
         state.githubOAuth = { loading: false, flowId: null, userCode: null, verificationUri: null, interval: 5, error: null, timer: null };
         state.inbox = { loading: false, connected: false, viewer: null, assigned: [], reviews: [], error: null, fetchedAt: null };
+        state.issueDraft = { open: false, loading: false, error: null, repo: "", title: "", body: "", assignSelf: true };
         renderInbox(); renderInboxBadge();
         toast("GitHub disconnected.");
       } catch (error) {
@@ -2374,10 +2419,111 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
       createPlanForTicket(ticket);
     }
 
+    function githubRepoOptions() {
+      const bindings = state.health?.workspaceBindings || [];
+      const seen = new Set();
+      return bindings
+        .map((binding) => `${binding.owner}/${binding.repo}`)
+        .filter((repo) => {
+          const key = repo.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+    }
+
+    function renderIssueDraft() {
+      if (!state.issueDraft.open) return "";
+      const repos = githubRepoOptions();
+      const defaultRepo = repos.includes(state.issueDraft.repo) ? state.issueDraft.repo : (repos[0] || "");
+      const repoOptions = repos.length
+        ? repos.map((repo) => `<option value="${escapeHtml(repo)}" ${repo === defaultRepo ? "selected" : ""}>${escapeHtml(repo)}</option>`).join("")
+        : `<option value="">No bound GitHub repos</option>`;
+      return `
+        <div class="inbox-connect issue-draft">
+          <h3>Create GitHub issue</h3>
+          <form class="issue-draft-form" id="issueDraftForm">
+            <div class="issue-draft-grid">
+              <label>
+                repo
+                <select id="issueRepo" ${repos.length ? "" : "disabled"}>
+                  ${repoOptions}
+                </select>
+              </label>
+              <label>
+                assign
+                <select id="issueAssignSelf">
+                  <option value="yes" ${state.issueDraft.assignSelf !== false ? "selected" : ""}>@${escapeHtml(state.inbox.viewer?.login || "me")}</option>
+                  <option value="no" ${state.issueDraft.assignSelf === false ? "selected" : ""}>nobody</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              title
+              <input id="issueTitle" placeholder="Short, actionable issue title" autocomplete="off" value="${escapeHtml(state.issueDraft.title || "")}">
+            </label>
+            <label>
+              body
+              <textarea id="issueBody" placeholder="Goal, context, acceptance criteria, test plan...">${escapeHtml(state.issueDraft.body || "")}</textarea>
+            </label>
+            ${state.issueDraft.error ? `<p class="session-meta">${escapeHtml(state.issueDraft.error)}</p>` : ""}
+            <div class="inbox-connect-actions">
+              <button type="button" class="mini-btn" id="cancelIssueDraft">cancel</button>
+              <button type="submit" class="mini-btn primary" ${state.issueDraft.loading || !repos.length ? "disabled" : ""}>${state.issueDraft.loading ? "creating..." : "create issue"}</button>
+            </div>
+          </form>
+        </div>
+      `;
+    }
+
+    async function submitIssueDraft(event) {
+      event.preventDefault();
+      const repo = $("#issueRepo")?.value || "";
+      const title = $("#issueTitle")?.value.trim() || "";
+      const body = $("#issueBody")?.value.trim() || "";
+      const assignSelf = ($("#issueAssignSelf")?.value || "yes") === "yes";
+      state.issueDraft = { ...state.issueDraft, repo, title, body, assignSelf };
+      if (!repo) {
+        state.issueDraft.error = "Pick a GitHub repo first.";
+        renderInbox();
+        return;
+      }
+      if (!title) {
+        state.issueDraft.error = "Issue title is required.";
+        renderInbox();
+        return;
+      }
+
+      state.issueDraft.loading = true;
+      state.issueDraft.error = null;
+      renderInbox();
+      try {
+        const response = await apiFetch("/api/github/issues", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ repo, title, body, assignSelf })
+        });
+        const data = await readApiJson(response, "Could not create issue");
+        if (!response.ok || !data.ok) throw new Error(data.error || "Could not create issue");
+        state.issueDraft = { open: false, loading: false, error: null, repo: "", title: "", body: "", assignSelf: true };
+        toast(`Created ${data.issue.repo}#${data.issue.number}.`);
+        await loadInbox({ force: true });
+      } catch (error) {
+        state.issueDraft.loading = false;
+        state.issueDraft.error = error.message;
+        renderInbox();
+      }
+    }
+
     function renderInbox() {
       const subtitle = $("#inboxSubtitle");
       const body = $("#inboxBody");
       const { loading, connected, viewer, assigned, reviews, error, fetchedAt } = state.inbox;
+      const newIssueButton = $("#newIssue");
+      if (newIssueButton) {
+        newIssueButton.disabled = loading || !connected;
+        newIssueButton.textContent = state.issueDraft.open ? "close issue" : "new issue";
+      }
 
       if (loading) {
         subtitle.textContent = "Loading...";
@@ -2482,17 +2628,26 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
           <button type="button" class="mini-btn" id="disconnectGithub">disconnect</button>
         </div>
       `;
+      const issueDraft = renderIssueDraft();
       if (!sections.length) {
-        body.innerHTML = `${accountActions}<div class="empty">Inbox zero. Nothing assigned to @${escapeHtml(viewer?.login || "you")} right now.</div>`;
+        body.innerHTML = `${accountActions}${issueDraft}<div class="empty">Inbox zero. Nothing assigned to @${escapeHtml(viewer?.login || "you")} right now.</div>`;
         $("#disconnectGithub")?.addEventListener("click", disconnectGithub);
+        $("#issueDraftForm")?.addEventListener("submit", submitIssueDraft);
+        $("#cancelIssueDraft")?.addEventListener("click", () => { state.issueDraft = { open: false, loading: false, error: null, repo: "", title: "", body: "", assignSelf: true }; renderInbox(); });
         return;
       }
-      body.innerHTML = `${accountActions}${sections.join("")}`;
+      body.innerHTML = `${accountActions}${issueDraft}${sections.join("")}`;
       $("#disconnectGithub")?.addEventListener("click", disconnectGithub);
+      $("#issueDraftForm")?.addEventListener("submit", submitIssueDraft);
+      $("#cancelIssueDraft")?.addEventListener("click", () => { state.issueDraft = { open: false, loading: false, error: null, repo: "", title: "", body: "", assignSelf: true }; renderInbox(); });
     }
 
     $("#inboxToggle").addEventListener("click", openInbox);
     $("#closeInbox").addEventListener("click", closeInbox);
+    $("#newIssue").addEventListener("click", () => {
+      state.issueDraft = { ...state.issueDraft, open: !state.issueDraft.open, loading: false, error: null };
+      renderInbox();
+    });
     $("#refreshInbox").addEventListener("click", () => loadInbox({ force: true }));
     $("#closePlan").addEventListener("click", closePlan);
     $("#approvePlan").addEventListener("click", approveCurrentPlan);
