@@ -571,6 +571,10 @@
       background: var(--bg);
     }
 
+    .session-view.with-composer {
+      grid-template-rows: auto 1fr auto;
+    }
+
     .inbox-toggle {
       display: inline-flex;
       align-items: center;
@@ -1022,6 +1026,29 @@
       scrollbar-width: thin;
     }
 
+    .session-composer {
+      border-top: 1px solid var(--line);
+      background: rgba(8, 9, 11, 0.96);
+      padding: 10px 14px max(10px, env(safe-area-inset-bottom));
+    }
+
+    .session-composer-label {
+      width: min(880px, 100%);
+      margin: 0 auto 7px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .session-composer textarea {
+      min-height: 72px;
+      max-height: 160px;
+    }
+
+    .session-composer .send {
+      min-height: 72px;
+    }
+
     .item {
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -1189,12 +1216,14 @@
       }
 
       .composer-inner,
+      .session-composer .composer-inner,
       .fs-actions,
       .issue-draft-grid {
         grid-template-columns: 1fr;
       }
 
-      .send {
+      .send,
+      .session-composer .send {
         width: 100%;
         min-height: 48px;
       }
@@ -1269,17 +1298,17 @@
         <span class="harness-label">agent</span>
       </div>
       <form class="composer-inner" id="chatForm">
-        <textarea id="messageInput" placeholder="Ask the agent to inspect, explain, or change this workspace...">Reply with one sentence confirming this request reached the agent on my Mac. Do not edit files.</textarea>
-        <button class="send" id="sendButton" aria-label="Send message">↵</button>
+        <textarea id="messageInput" placeholder="Start a new session in this workspace...">Reply with one sentence confirming this request reached the agent on my Mac. Do not edit files.</textarea>
+        <button class="send" id="sendButton" aria-label="Start new session">↵</button>
       </form>
       <div class="hint">
-        <span id="sessionHint">No active session</span>
+        <span id="sessionHint">Home messages start new sessions</span>
         <span id="phoneUrl">Open from iPhone: checking...</span>
       </div>
     </footer>
   </div>
 
-  <section class="session-view" id="sessionView" hidden>
+  <section class="session-view with-composer" id="sessionView" hidden>
     <header class="session-header">
       <div class="session-header-top">
         <button class="back-btn" id="closeSession" type="button">back</button>
@@ -1296,6 +1325,13 @@
       </div>
     </header>
     <main class="session-body" id="sessionBody"></main>
+    <footer class="session-composer">
+      <div class="session-composer-label" id="sessionComposerLabel">Continue this session</div>
+      <form class="composer-inner" id="sessionChatForm">
+        <textarea id="sessionMessageInput" placeholder="Continue this session..."></textarea>
+        <button class="send" id="sessionSendButton" aria-label="Continue session">↵</button>
+      </form>
+    </footer>
   </section>
 
   <section class="session-list-view" id="sessionListView" hidden>
@@ -1643,6 +1679,7 @@
       $("#sessionSubtitle").textContent = `${session.workspace?.path || "workspace"} · ${session.remoteId || session.localId}`;
       $("#sessionStatus").textContent = session.status;
       $("#sessionStatus").className = `status-chip ${session.status}`;
+      $("#sessionComposerLabel").textContent = `Continue ${session.remoteId || session.localId}`;
 
       document.querySelectorAll("[data-session-tab]").forEach((button) => {
         button.classList.toggle("active", button.dataset.sessionTab === state.activeSessionTab);
@@ -1705,6 +1742,7 @@
     function setRunning(isRunning) {
       state.running = isRunning;
       $("#sendButton").disabled = isRunning;
+      $("#sessionSendButton").disabled = isRunning;
       $("#daemonPill").className = `pill ${isRunning ? "running" : state.health?.ok ? "online" : "failed"}`;
       $("#daemonPillText").textContent = isRunning ? "running" : state.health?.ok ? "online" : state.authRequired ? "pair" : "offline";
     }
@@ -2119,14 +2157,28 @@
       };
     }
 
-    async function continueActiveSession(message) {
-      const session = activeSession();
-      if (!session?.remoteId || session.status === "running") {
+    function sessionById(sessionId) {
+      return state.sessions.find((session) => session.localId === sessionId || session.remoteId === sessionId);
+    }
+
+    async function continueSession(sessionId, message) {
+      const session = sessionById(sessionId);
+      if (!session) {
+        toast("Select a session first.");
+        return false;
+      }
+      if (!session.remoteId) {
+        toast("Wait for this session to finish starting.");
+        return false;
+      }
+      if (session.status === "running" || state.running) {
+        toast("Wait for the current turn to finish.");
         return false;
       }
 
       session.messages.push({ role: "user", label: "you", body: message, at: now() });
       session.status = "running";
+      state.activeSessionId = session.localId;
       setRunning(true);
       renderSessions();
       renderSessionView();
@@ -2140,7 +2192,7 @@
         });
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || "Could not continue session");
-        $("#messageInput").value = "";
+        $("#sessionMessageInput").value = "";
         $("#sessionHint").textContent = `${data.sessionId} · ${session.harnessLabel || data.harness} · ${data.workspace?.name || "workspace"}`;
         connectSessionEvents(session);
         return true;
@@ -2150,7 +2202,7 @@
         setRunning(false);
         renderSessions();
         renderSessionView();
-        return true;
+        return false;
       }
     }
 
@@ -2293,9 +2345,18 @@
         toast("Wait for the current turn to finish.");
         return;
       }
-      continueActiveSession(message).then((handled) => {
-        if (!handled) startSession(message);
-      });
+      startSession(message);
+    });
+
+    $("#sessionChatForm").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const message = $("#sessionMessageInput").value.trim();
+      if (!message) {
+        toast("Write a message first.");
+        return;
+      }
+      const session = activeSession();
+      continueSession(session?.localId || session?.remoteId, message);
     });
 
     $("#harnessRow").addEventListener("click", (event) => {
