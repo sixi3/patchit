@@ -1865,8 +1865,8 @@ function normalizeIssueDraft(raw, originalMessage) {
 
 async function draftGithubIssue({ message, workspaceId, requestedHarness }) {
   const workspace = resolveWorkspace(workspaceId);
-  const provider = getActivePlanningProvider(requestedHarness);
-  if (!provider) {
+  const available = PLANNING_REGISTRY.filter((provider) => provider.isAvailable());
+  if (!available.length) {
     const error = new Error("No local agent is available to draft the issue. Install Codex or Claude Code and refresh.");
     error.statusCode = 503;
     throw error;
@@ -1889,16 +1889,57 @@ User request:
 ${String(message || "").trim()}
 
 Draft the GitHub issue title and Markdown body.`;
-  const result = await provider.generateBlueprint({
-    systemPrompt,
-    schema: ISSUE_DRAFT_SCHEMA,
-    userPrompt,
-    cwd: workspace.path
-  });
+
+  const preferred = [
+    requestedHarness === "claude-code" ? "claude-cli" : null,
+    requestedHarness === "codex" ? "codex-cli" : null,
+    "codex-cli",
+    "claude-cli"
+  ].filter(Boolean);
+  const providers = preferred
+    .map((id) => available.find((provider) => provider.id === id))
+    .filter((provider, index, list) => provider && list.indexOf(provider) === index);
+  const errors = [];
+  for (const provider of providers) {
+    try {
+      const result = provider.id === "claude-cli"
+        ? await draftGithubIssueWithClaude({ systemPrompt, schema: ISSUE_DRAFT_SCHEMA, userPrompt, cwd: workspace.path })
+        : await provider.generateBlueprint({ systemPrompt, schema: ISSUE_DRAFT_SCHEMA, userPrompt, cwd: workspace.path });
+      return {
+        ...normalizeIssueDraft(result.structured_output, message),
+        repo: binding ? `${binding.owner}/${binding.repo}` : "",
+        provider: result.provider || provider.id
+      };
+    } catch (error) {
+      errors.push(`${provider.id}: ${error.message}`);
+    }
+  }
+
+  const error = new Error(`Could not draft issue with local agents. ${errors.join(" | ")}`);
+  error.statusCode = 500;
+  throw error;
+}
+
+async function draftGithubIssueWithClaude({ systemPrompt, schema, userPrompt, cwd }) {
+  const args = [
+    "-p", userPrompt,
+    "--append-system-prompt", systemPrompt,
+    "--output-format", "json",
+    "--json-schema", JSON.stringify(schema),
+    "--permission-mode", "dontAsk",
+    "--allowedTools", "Read,Glob,Grep",
+    "--add-dir", cwd,
+    "--max-turns", "8"
+  ];
+  const { stdout } = await runCapture(CLAUDE_BIN, args, cwd, { timeout: 120_000 });
+  const parsed = JSON.parse(stdout);
+  const structuredOutput = firstParseableJsonObject([parsed.structured_output, parsed.result, parsed.response, parsed.content, stdout]);
   return {
-    ...normalizeIssueDraft(result.structured_output, message),
-    repo: binding ? `${binding.owner}/${binding.repo}` : "",
-    provider: result.provider || provider.id
+    structured_output: structuredOutput?.structured_output || structuredOutput,
+    cost_usd: parsed.total_cost_usd ?? null,
+    duration_ms: parsed.duration_ms ?? null,
+    model: parsed.model ?? null,
+    provider: "claude-cli"
   };
 }
 
