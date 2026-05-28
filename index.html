@@ -2211,11 +2211,54 @@
 
     $("#createWorkspace").addEventListener("click", createWorkspace);
 
+    function looksLikeGithubIssueRequest(message) {
+      const text = String(message || "").toLowerCase();
+      return /\b(create|add|open|file|upload|make|raise)\b[\s\S]{0,80}\b(github\s+)?issue\b/.test(text) ||
+        /\bissue\b[\s\S]{0,80}\b(github|repo|repository)\b/.test(text);
+    }
+
+    function issueTitleFromMessage(message) {
+      const lines = String(message || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      const titled = lines.find((line) => /^(#+\s*)?(\*\*)?title(\*\*)?\s*:/i.test(line));
+      if (titled) {
+        return titled.replace(/^(#+\s*)?(\*\*)?title(\*\*)?\s*:\s*/i, "").replace(/\*\*$/g, "").trim().slice(0, 160);
+      }
+      const heading = lines.find((line) => /^#{1,3}\s+/.test(line));
+      if (heading) return heading.replace(/^#{1,3}\s+/, "").trim().slice(0, 160);
+      const firstSpecific = lines.find((line) => !/\b(create|add|open|file|upload|make|raise)\b[\s\S]{0,80}\b(github\s+)?issue\b/i.test(line));
+      return (firstSpecific || "").replace(/^[-*]\s*/, "").slice(0, 160);
+    }
+
+    function repoForSelectedWorkspace() {
+      const workspaceId = state.workspaceId;
+      const binding = (state.health?.workspaceBindings || []).find((item) => item.workspaceId === workspaceId);
+      return binding ? `${binding.owner}/${binding.repo}` : "";
+    }
+
+    function openIssueDraftFromMessage(message) {
+      state.issueDraft = {
+        open: true,
+        loading: false,
+        error: null,
+        repo: repoForSelectedWorkspace(),
+        title: issueTitleFromMessage(message),
+        body: message,
+        assignSelf: true
+      };
+      $("#messageInput").value = "";
+      openInbox();
+      toast("Opened GitHub issue composer.");
+    }
+
     $("#chatForm").addEventListener("submit", (event) => {
       event.preventDefault();
       const message = $("#messageInput").value.trim();
       if (!message) {
         toast("Write a message first.");
+        return;
+      }
+      if (looksLikeGithubIssueRequest(message)) {
+        openIssueDraftFromMessage(message);
         return;
       }
       if (state.running) {
