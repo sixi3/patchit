@@ -119,7 +119,7 @@
       "type": "array",
       "maxItems": 3,
       "items": { "type": "string", "maxLength": 200 },
-      "description": "Decisions whose answers would meaningfully change the implementation. The user can resolve before dispatch."
+      "description": "Genuine blocking decisions only. DEFAULT TO EMPTY — most tickets have zero. Add a question only if not answering it would force a choice between materially different implementations that a competent engineer would stop and ask about. Never about style/naming/formatting or anything inferable from the repo. If non-empty, blueprint_confidence must be correspondingly lower."
     },
 
     "default_agent": {

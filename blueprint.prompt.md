@@ -89,9 +89,24 @@ are callers of the change site (changing the callee shouldn't require
 changing the caller).
 
 ## open_questions
-Free-text questions whose answers would meaningfully change the
-implementation. Examples: "Postgres or MySQL?", "Use existing pool
-or create new?". Keep to ≤ 3.
+DEFAULT TO AN EMPTY LIST. Most tickets have zero open questions.
+
+Add a question ONLY if all three are true:
+  - Not answering it forces a choice between materially DIFFERENT
+    implementations (not style, naming, or formatting)
+  - A competent engineer would genuinely stop and ask a teammate
+    rather than make a reasonable assumption and proceed
+  - The answer cannot be inferred from the codebase, AGENTS.md, or
+    the ticket text
+
+Never ask about: code style, naming, formatting, test framework
+choice, or anything discoverable by reading the repo. Do NOT invent
+questions to populate this field. An empty array is the correct and
+common answer.
+
+If you DO raise a genuine question, you MUST lower blueprint_confidence
+to match — open questions mean you are less sure. A blueprint with
+open questions and high confidence is contradictory; don't produce one.
 
 ## default_agent
 - "claude" — open-ended, requires judgment, refactor, risk-bearing
