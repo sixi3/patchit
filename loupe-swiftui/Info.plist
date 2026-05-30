@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Allow the app to reach the Loupe daemon on the LAN over plain HTTP.
+	     NSAllowsLocalNetworking permits cleartext to local/private-range hosts
+	     (e.g. 192.168.x.x, *.local) without disabling ATS globally. The HTTPS
+	     Cloudflare tunnel path is unaffected. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<!-- iOS 14+ requires user consent to talk to local-network devices. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Loupe connects to the Loupe daemon running on your Mac over your local network.</string>
+</dict>
+</plist>
