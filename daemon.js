@@ -35,6 +35,10 @@ ensureAlphaAuth();
 // Cache the GitHub inbox briefly so the PWA can re-render without hammering the API.
 const inboxCache = { fetchedAt: 0, ttlMs: 60_000, payload: null };
 const githubOAuthFlows = new Map();
+const blueprintJobs = new Map();
+const blueprintQueue = [];
+let activeBlueprintJobs = 0;
+const MAX_BACKGROUND_BLUEPRINT_JOBS = Number(process.env.LOUPE_BLUEPRINT_CONCURRENCY || 1);
 
 function findClaudeBin() {
   // 1. claude on PATH
@@ -489,7 +493,11 @@ async function fetchGithubInbox(token) {
   function bindingFor(repoFullName) {
     if (!repoFullName) return null;
     const [owner, repo] = repoFullName.split("/");
-    return bindings.find((b) => b.owner.toLowerCase() === owner.toLowerCase() && b.repo.toLowerCase() === repo.toLowerCase()) || null;
+    const matches = bindings.filter((b) => b.owner.toLowerCase() === owner.toLowerCase() && b.repo.toLowerCase() === repo.toLowerCase());
+    return matches.find((b) => {
+      const workspace = workspaces.find((w) => w.id === b.workspaceId);
+      return workspace && workspaceReadiness(workspace).canDispatch;
+    }) || matches[0] || null;
   }
 
   function normalize(item, kind) {
@@ -514,7 +522,9 @@ async function fetchGithubInbox(token) {
       binding,
       blueprint: null
     };
-    ticket.blueprint = kind === "issue" && workspace ? readCachedBlueprintForTicket(ticket, workspace) : null;
+    if (kind === "issue" && workspace) {
+      ticket.blueprint = readCachedBlueprintForTicket(ticket, workspace) || enqueueBlueprintForTicket(ticket, workspace);
+    }
     return ticket;
   }
 
@@ -1621,6 +1631,110 @@ function readCachedBlueprintForTicket(ticket, workspace) {
   }
 }
 
+function blueprintJobKey(ticket, workspace) {
+  return blueprintCachePath(ticket, workspace);
+}
+
+function publicBlueprintJob(job) {
+  const status = job?.status || "queued";
+  const message = status === "failed"
+    ? (job.error || "Blueprint generation failed.")
+    : status === "running"
+      ? "Analyzing ticket..."
+      : "Queued for analysis...";
+  return {
+    status,
+    outcome: "needs_info",
+    summary: message,
+    size: null,
+    files: [],
+    deps: [],
+    migrations: [],
+    riskAreas: [],
+    risk_areas: [],
+    outOfScope: [],
+    out_of_scope: [],
+    openQuestions: [],
+    open_questions: [],
+    missingInfo: status === "failed" ? [message] : [],
+    missing_info: status === "failed" ? [message] : [],
+    defaultAgent: null,
+    default_agent: null,
+    blueprintConfidence: null,
+    blueprint_confidence: null,
+    confidence: null,
+    costEstimate: null,
+    cost_estimate: null,
+    provider: null,
+    cached: false,
+    stale: false,
+    staleReason: null,
+    stale_reason: null,
+    repoSha: job?.repoSha || repoHeadSha(job.workspace),
+    repo_sha: job?.repoSha || repoHeadSha(job.workspace),
+    ticketHash: job?.ticketHash || ticketHash(job.ticket),
+    ticket_hash: job?.ticketHash || ticketHash(job.ticket)
+  };
+}
+
+function enqueueBlueprintForTicket(ticket, workspace) {
+  fs.mkdirSync(BLUEPRINT_CACHE_DIR, { recursive: true });
+  const key = blueprintJobKey(ticket, workspace);
+  const existing = blueprintJobs.get(key);
+  if (existing && ["queued", "running"].includes(existing.status)) {
+    return publicBlueprintJob(existing);
+  }
+  if (existing?.status === "done" && existing.blueprint) {
+    return existing.blueprint;
+  }
+  if (existing?.status === "failed" && Date.now() - Date.parse(existing.updatedAt || 0) < 5 * 60_000) {
+    return publicBlueprintJob(existing);
+  }
+  const job = {
+    key,
+    status: "queued",
+    ticket: { ...ticket, binding: undefined, blueprint: undefined },
+    workspace,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    repoSha: repoHeadSha(workspace),
+    ticketHash: ticketHash(ticket),
+    error: null
+  };
+  blueprintJobs.set(key, job);
+  blueprintQueue.push(job);
+  pumpBlueprintQueue();
+  return publicBlueprintJob(job);
+}
+
+function pumpBlueprintQueue() {
+  while (activeBlueprintJobs < MAX_BACKGROUND_BLUEPRINT_JOBS && blueprintQueue.length) {
+    const job = blueprintQueue.shift();
+    if (!job || job.status !== "queued") continue;
+    activeBlueprintJobs += 1;
+    job.status = "running";
+    job.updatedAt = new Date().toISOString();
+    createBlueprint(job.ticket, job.workspace.id, "claude-code")
+      .then((blueprint) => {
+        job.status = "done";
+        job.blueprint = publicBlueprint(blueprint);
+        job.updatedAt = new Date().toISOString();
+        inboxCache.fetchedAt = 0;
+      })
+      .catch((error) => {
+        job.status = "failed";
+        job.error = error?.message || String(error);
+        job.updatedAt = new Date().toISOString();
+        inboxCache.fetchedAt = 0;
+        console.warn(`Background Blueprint failed for ${job.ticket?.repo || "repo"}#${job.ticket?.number || "ticket"}: ${job.error}`);
+      })
+      .finally(() => {
+        activeBlueprintJobs -= 1;
+        pumpBlueprintQueue();
+      });
+  }
+}
+
 function renderBlueprintPrompt(ticket, workspace) {
   const { prompt, schema } = loadBlueprintArtifacts();
   const systemPrompt = prompt
@@ -1712,6 +1826,7 @@ function normalizeBlueprint(raw, ticket, workspace, providerId, meta = {}) {
     costUsd: meta.costUsd ?? null,
     durationMs: meta.durationMs ?? null,
     model: meta.model || null,
+    usage: meta.usage || null,
     // Backward-compatible fields for the existing plan UI and dispatch context.
     likelyFiles: files.map((file) => file.path),
     risks: [...riskAreas, ...migrations.map((migration) => `${migration.kind} migration: ${migration.purpose}`)],
@@ -1721,11 +1836,175 @@ function normalizeBlueprint(raw, ticket, workspace, providerId, meta = {}) {
   };
 }
 
+function roundUsd(value) {
+  return Math.round(Number(value || 0) * 10000) / 10000;
+}
+
+// ---------- Cost model + model routing ----------
+// Per-million-token USD pricing (May 2026). Single source of truth for both
+// measured (blueprint) and estimated (execution) cost. Update as prices move.
+const MODEL_PRICING = {
+  opus:   { in: 5.0,  out: 25.0, cachedIn: 0.5 },   // Claude Opus 4.7
+  sonnet: { in: 3.0,  out: 15.0, cachedIn: 0.3 },   // Claude Sonnet 4.6
+  haiku:  { in: 1.0,  out: 5.0,  cachedIn: 0.1 },   // Claude Haiku 4.5
+  codex:  { in: 1.25, out: 10.0, cachedIn: 0.125 }  // OpenAI codex-tier (approx)
+};
+function pricingFor(model) {
+  const m = String(model || "").toLowerCase();
+  if (m.includes("opus")) return { tier: "opus", ...MODEL_PRICING.opus };
+  if (m.includes("sonnet")) return { tier: "sonnet", ...MODEL_PRICING.sonnet };
+  if (m.includes("haiku")) return { tier: "haiku", ...MODEL_PRICING.haiku };
+  if (m.includes("codex") || m.includes("gpt")) return { tier: "codex", ...MODEL_PRICING.codex };
+  return null;
+}
+// Plan-and-execute routing: strong reasoning model plans, efficient coder executes.
+// Overridable via env or config.models.{blueprint,execution}.
+function blueprintModelAlias() {
+  return process.env.LOUPE_BLUEPRINT_MODEL || config.models?.blueprint || "opus";
+}
+function executionModelAlias() {
+  return process.env.LOUPE_EXECUTION_MODEL || config.models?.execution || "sonnet";
+}
+// Exact cost from token usage (used for the MEASURED blueprint cost).
+function usdFromUsage(model, usage) {
+  const p = pricingFor(model);
+  if (!p || !usage) return null;
+  const cacheRead = usage.cache_read_input_tokens ?? usage.cacheReadInputTokens ?? 0;
+  const cacheWrite = usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens ?? 0;
+  const input = usage.input_tokens ?? usage.inputTokens ?? 0;   // fresh, uncached
+  const output = usage.output_tokens ?? usage.outputTokens ?? 0;
+  // Cache writes bill at ~1.25× base input (5-min TTL); reads at the cached rate.
+  return roundUsd((input * p.in + cacheWrite * p.in * 1.25 + cacheRead * p.cachedIn + output * p.out) / 1e6);
+}
+// Execution token estimate per size bucket (input context, output diff).
+// Heuristic seed — replaced by calibrated values once real runs accumulate.
+const EXEC_TOKENS = {
+  S:  { inLow: 25_000,  inHigh: 60_000,  out: 4_000 },
+  M:  { inLow: 60_000,  inHigh: 150_000, out: 10_000 },
+  L:  { inLow: 150_000, inHigh: 350_000, out: 25_000 },
+  XL: { inLow: 350_000, inHigh: 800_000, out: 60_000 }
+};
+
+function estimateExecutionCost(blueprint) {
+  if (!blueprint || blueprint.outcome !== "ready") return null;
+  const size = ["S", "M", "L", "XL"].includes(blueprint.size) ? blueprint.size : "M";
+  const bucket = EXEC_TOKENS[size];
+  const fileCount = Array.isArray(blueprint.files) ? blueprint.files.length : 0;
+  const riskCount = Array.isArray(blueprint.riskAreas) ? blueprint.riskAreas.length : 0;
+  const factor = 1 + Math.max(0, fileCount - 3) * 0.08 + riskCount * 0.12;
+  const model = executionModelAlias();
+  const p = pricingFor(model) || MODEL_PRICING.sonnet;
+  const inLow = Math.round(bucket.inLow * factor);
+  const inHigh = Math.round(bucket.inHigh * factor);
+  return {
+    lowUsd: roundUsd((inLow * p.in + bucket.out * p.out) / 1e6),
+    highUsd: roundUsd((inHigh * p.in + bucket.out * 1.5 * p.out) / 1e6),
+    currency: "USD",
+    model,
+    tokensLow: inLow + bucket.out,
+    tokensHigh: inHigh + Math.round(bucket.out * 1.5),
+    calibrated: false,
+    basis: `estimate:${model}`
+  };
+}
+
+function blueprintCostEstimate(blueprint) {
+  // Prefer cost computed from real token usage × our pricing table; fall back to
+  // the provider-reported cost (e.g. Claude CLI total_cost_usd).
+  const measured = usdFromUsage(blueprint?.model, blueprint?.usage);
+  const actual = measured ?? (typeof blueprint?.costUsd === "number" ? roundUsd(blueprint.costUsd) : null);
+  const execution = estimateExecutionCost(blueprint);
+  const u = blueprint?.usage || null;
+  return {
+    blueprint: {
+      actualUsd: actual,
+      currency: "USD",
+      measured: actual !== null,
+      provider: blueprint?.provider || null,
+      model: blueprint?.model || null,
+      tokens: u ? {
+        input: u.input_tokens ?? u.inputTokens ?? null,
+        output: u.output_tokens ?? u.outputTokens ?? null,
+        cached: u.cache_read_input_tokens ?? u.cacheReadInputTokens ?? null
+      } : null
+    },
+    execution,
+    total: execution ? {
+      lowUsd: roundUsd((actual || 0) + execution.lowUsd),
+      highUsd: roundUsd((actual || 0) + execution.highUsd),
+      currency: "USD",
+      includesEstimatedBlueprint: actual === null
+    } : null
+  };
+}
+
+function inferBlueprintFromTicket(ticket) {
+  const text = `${ticket.title || ""}\n${ticket.body || ""}`;
+  const fileCandidates = new Set();
+  function addFileCandidate(value) {
+    const candidate = String(value || "")
+      .replace(/\([^)]*\)/g, "")
+      .replace(/^new\s+/i, "")
+      .replace(/[.,;:]+$/g, "")
+      .trim();
+    if (candidate.includes("/") && !/\s/.test(candidate)) fileCandidates.add(candidate);
+  }
+  for (const match of text.matchAll(/`([^`]+\.[A-Za-z0-9]+)`/g)) {
+    addFileCandidate(match[1]);
+  }
+  for (const match of text.matchAll(/(?:Files?|Suggested files?)\s*:\s*([^\n]+)/gi)) {
+    for (const part of String(match[1] || "").split(/[,;]/)) {
+      addFileCandidate(part.replace(/[`*]/g, ""));
+    }
+  }
+  const lower = text.toLowerCase();
+  const risks = [];
+  for (const risk of ["payments", "auth", "security", "migration", "concurrency", "data-loss", "performance", "infra", "observability"]) {
+    if (lower.includes(risk) || (risk === "concurrency" && /race|concurrent|parallel/.test(lower))) risks.push(risk);
+  }
+  const files = [...fileCandidates].slice(0, 6);
+  const size = text.length > 3500 || files.length > 4 ? "L" : text.length > 1200 || files.length > 2 ? "M" : "S";
+  return {
+    outcome: "ready",
+    summary: String(ticket.body || ticket.title || "Ticket is ready for dispatch.")
+      .replace(/\s+/g, " ")
+      .slice(0, 220),
+    size,
+    files: files.map((file) => ({
+      path: file,
+      is_new: /new|add|create/i.test(text),
+      confidence: 0.74,
+      why: "Mentioned directly in the ticket."
+    })),
+    deps: [],
+    migrations: [],
+    risk_areas: risks.slice(0, 8),
+    out_of_scope: [],
+    open_questions: [],
+    missing_info: [],
+    default_agent: risks.some((risk) => ["auth", "security", "payments", "migration"].includes(risk)) ? "claude" : "codex",
+    blueprint_confidence: files.length ? 0.72 : 0.58,
+    tests: ["Run the app/build checks touched by the changed files."]
+  };
+}
+
 function publicBlueprint(blueprint) {
   if (!blueprint || blueprint.status === "not_started") return blueprint;
   const { workspace, ticket, ...rest } = blueprint;
+  const costEstimate = blueprintCostEstimate(blueprint);
   return {
     ...rest,
+    risk_areas: blueprint.riskAreas || [],
+    out_of_scope: blueprint.outOfScope || [],
+    open_questions: blueprint.openQuestions || [],
+    missing_info: blueprint.missingInfo || [],
+    default_agent: blueprint.defaultAgent || null,
+    blueprint_confidence: blueprint.blueprintConfidence ?? blueprint.confidence ?? null,
+    stale_reason: blueprint.staleReason || null,
+    repo_sha: blueprint.repoSha || null,
+    ticket_hash: blueprint.ticketHash || null,
+    cost_estimate: costEstimate,
+    costEstimate,
     workspace: workspace ? { id: workspace.id, name: workspace.name, path: workspace.path } : null,
     ticket: ticket ? {
       kind: ticket.kind,
@@ -1782,6 +2061,7 @@ class ClaudeCliProvider extends PlanningProvider {
       "--append-system-prompt", systemPrompt,
       "--output-format", "json",
       "--json-schema", JSON.stringify(schema),
+      "--model", blueprintModelAlias(),
       "--permission-mode", "dontAsk",
       "--allowedTools", "Read,Glob,Grep",
       "--add-dir", cwd,
@@ -1802,8 +2082,10 @@ class ClaudeCliProvider extends PlanningProvider {
     return {
       structured_output: structuredOutput,
       cost_usd: parsed.total_cost_usd ?? null,
+      usage: parsed.usage ?? null,
       duration_ms: parsed.duration_ms ?? null,
-      model: parsed.model ?? null,
+      // CLI often omits the model in JSON output; fall back to the alias we routed.
+      model: parsed.model ?? blueprintModelAlias(),
       provider: this.id
     };
   }
@@ -1869,6 +2151,10 @@ const ISSUE_DRAFT_SCHEMA = {
 };
 
 function getActivePlanningProvider(requestedHarness) {
+  return getPlanningProviderCandidates(requestedHarness)[0] || null;
+}
+
+function getPlanningProviderCandidates(requestedHarness) {
   const requestedProvider = config.blueprint?.provider;
   const available = PLANNING_REGISTRY.filter((provider) => provider.isAvailable());
   const preferred = [
@@ -1879,11 +2165,15 @@ function getActivePlanningProvider(requestedHarness) {
     "codex-cli"
   ].filter(Boolean);
 
+  const candidates = [];
   for (const id of preferred) {
     const match = available.find((provider) => provider.id === id);
-    if (match) return match;
+    if (match && !candidates.includes(match)) candidates.push(match);
   }
-  return null;
+  for (const provider of available) {
+    if (!candidates.includes(provider)) candidates.push(provider);
+  }
+  return candidates;
 }
 
 function parseCodexPlanOutput(stdout) {
@@ -2017,26 +2307,49 @@ async function createBlueprint(ticket, workspaceId, requestedHarness, { bypassCa
         ticketHash: cached.ticketHash || cached._ticket_hash,
         costUsd: cached.costUsd ?? cached._cost_usd,
         durationMs: cached.durationMs ?? cached._duration_ms,
-        model: cached.model || cached._model
+        model: cached.model || cached._model,
+        usage: cached.usage || null
       }));
       plans.set(blueprint.id, blueprint);
       return blueprint;
     } catch {}
   }
 
-  const provider = getActivePlanningProvider(requestedHarness);
-  if (!provider) {
+  const providers = getPlanningProviderCandidates(requestedHarness);
+  if (!providers.length) {
     throw new Error("No Blueprint provider is available. Install Claude Code or Codex CLI on this Mac.");
   }
   const { systemPrompt, schema, userPrompt } = renderBlueprintPrompt(ticket, workspace);
   const startedAt = Date.now();
-  const result = await provider.generateBlueprint({
-    systemPrompt,
-    schema,
-    userPrompt,
-    cwd: workspace.path,
-    ticket
-  });
+  const errors = [];
+  let result = null;
+  let provider = null;
+  for (const candidate of providers) {
+    try {
+      result = await candidate.generateBlueprint({
+        systemPrompt,
+        schema,
+        userPrompt,
+        cwd: workspace.path,
+        ticket
+      });
+      provider = candidate;
+      break;
+    } catch (error) {
+      errors.push(`${candidate.id}: ${error.message}`);
+    }
+  }
+  if (!result || !provider) {
+    result = {
+      structured_output: inferBlueprintFromTicket(ticket),
+      cost_usd: 0,
+      duration_ms: Date.now() - startedAt,
+      model: "local-heuristic",
+      provider: "local-heuristic",
+      providerErrors: errors
+    };
+    provider = { id: "local-heuristic" };
+  }
   const blueprint = validateBlueprint(normalizeBlueprint(result.structured_output, ticket, workspace, result.provider || provider.id, {
     cached: false,
     cachePath,
@@ -2044,10 +2357,34 @@ async function createBlueprint(ticket, workspaceId, requestedHarness, { bypassCa
     ticketHash: ticketHash(ticket),
     costUsd: result.cost_usd,
     durationMs: result.duration_ms ?? Date.now() - startedAt,
-    model: result.model
+    model: result.model,
+    usage: result.usage || null
   }));
+  const inferred = normalizeBlueprint(inferBlueprintFromTicket(ticket), ticket, workspace, "local-heuristic");
+  if (!blueprint.files.length && inferred.files.length) {
+    blueprint.files = inferred.files;
+    blueprint.likelyFiles = inferred.likelyFiles;
+    blueprint.blueprintConfidence = Math.max(blueprint.blueprintConfidence ?? 0, 0.72);
+    blueprint.confidence = blueprint.blueprintConfidence;
+  }
+  if (!blueprint.riskAreas.length && inferred.riskAreas.length) {
+    blueprint.riskAreas = inferred.riskAreas;
+    blueprint.risks = inferred.risks;
+  }
   fs.writeFileSync(cachePath, JSON.stringify({
-    ...result.structured_output,
+    outcome: blueprint.outcome,
+    missing_info: blueprint.missingInfo,
+    summary: blueprint.summary,
+    size: blueprint.size,
+    files: blueprint.files,
+    deps: blueprint.deps,
+    migrations: blueprint.migrations,
+    risk_areas: blueprint.riskAreas,
+    out_of_scope: blueprint.outOfScope,
+    open_questions: blueprint.openQuestions,
+    default_agent: blueprint.defaultAgent,
+    blueprint_confidence: blueprint.blueprintConfidence,
+    tests: blueprint.tests,
     id: blueprint.id,
     createdAt: blueprint.createdAt,
     provider: blueprint.provider,
@@ -2055,7 +2392,8 @@ async function createBlueprint(ticket, workspaceId, requestedHarness, { bypassCa
     ticketHash: blueprint.ticketHash,
     costUsd: blueprint.costUsd,
     durationMs: blueprint.durationMs,
-    model: blueprint.model
+    model: blueprint.model,
+    usage: blueprint.usage
   }, null, 2));
   try { fs.chmodSync(cachePath, 0o600); } catch {}
   plans.set(blueprint.id, blueprint);
@@ -2314,6 +2652,7 @@ function spawnClaudeCode(session, message, { resume = false } = {}) {
     "--output-format", "stream-json",
     "--verbose",
     "--include-partial-messages",
+    "--model", executionModelAlias(),
     "--permission-mode", "acceptEdits",
     "--allowedTools", "Bash,WebFetch",
     "--add-dir", session.workspace.path
