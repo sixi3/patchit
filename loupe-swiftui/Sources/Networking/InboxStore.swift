@@ -20,6 +20,7 @@ final class InboxStore {
     private(set) var workstation: String = "Anands-Mac-mini.local"
     private(set) var onlineAgents: [Agent] = [.codex, .claude]
     private(set) var pairing: Pairing?
+    @ObservationIgnored private var blueprintPollTask: Task<Void, Never>?
 
     init() {
         pairing = PairingStore.load()
@@ -40,6 +41,8 @@ final class InboxStore {
 
     func unpair() {
         PairingStore.clear()
+        blueprintPollTask?.cancel()
+        blueprintPollTask = nil
         pairing = nil
         items = SampleInbox.items
         phase = .unpaired
@@ -57,9 +60,26 @@ final class InboxStore {
             let payload = try await client.inbox()
             items = payload.assigned.map { $0.toInboxItem() }
             phase = .loaded
+            scheduleBlueprintPollIfNeeded()
         } catch {
             // Keep showing whatever we have; surface the reason.
             phase = .failed((error as? LocalizedError)?.errorDescription ?? "\(error)")
+        }
+    }
+
+    private func scheduleBlueprintPollIfNeeded() {
+        guard items.contains(where: { $0.isAnalyzing }) else {
+            blueprintPollTask?.cancel()
+            blueprintPollTask = nil
+            return
+        }
+        guard blueprintPollTask == nil else { return }
+        blueprintPollTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            await MainActor.run {
+                self?.blueprintPollTask = nil
+                Task { await self?.refresh() }
+            }
         }
     }
 }

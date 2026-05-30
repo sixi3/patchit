@@ -83,6 +83,28 @@ struct MetricStat: View {
     }
 }
 
+struct CostStat: View {
+    let value: String
+
+    init(_ value: String) {
+        self.value = value
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "dollarsign.circle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.accent)
+            Text(value)
+                .font(LoupeFont.metric)
+                .foregroundStyle(Color.textPrimary)
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: LoupeRadius.chip).fill(Color.chipFill))
+    }
+}
+
 // MARK: - FileChip
 struct FileChip: View {
     let path: String
