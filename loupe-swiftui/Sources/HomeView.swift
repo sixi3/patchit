@@ -33,7 +33,10 @@ struct HomeView: View {
                 }
                 .padding(.bottom, LoupeSpace.xxl)
             }
-            .refreshable { await store.refresh() }
+            .refreshable {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                await store.refresh()
+            }
         }
         .task {
             if store.isPaired { await store.refresh() }
