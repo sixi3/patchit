@@ -1489,6 +1489,28 @@
       return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     }
 
+    function formatInboxUpdatedAt(fetchedAt) {
+      const fetchedTime = new Date(fetchedAt).getTime();
+      if (!Number.isFinite(fetchedTime)) return "";
+      const elapsedSeconds = Math.max(0, Math.floor((Date.now() - fetchedTime) / 1000));
+      if (elapsedSeconds < 60) return "Updated just now";
+      const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+      if (elapsedMinutes < 60) return `Updated ${elapsedMinutes}m ago`;
+      const elapsedHours = Math.floor(elapsedMinutes / 60);
+      if (elapsedHours < 24) return `Updated ${elapsedHours}h ago`;
+      const elapsedDays = Math.floor(elapsedHours / 24);
+      return `Updated ${elapsedDays}d ago`;
+    }
+
+    function renderInboxSubtitle() {
+      const subtitle = $("#inboxSubtitle");
+      if (!subtitle) return;
+      const { loading, connected, viewer, error, fetchedAt } = state.inbox;
+      if (loading || error || !connected) return;
+      const updatedAt = formatInboxUpdatedAt(fetchedAt);
+      subtitle.textContent = `@${viewer?.login || "you"}${updatedAt ? ` · ${updatedAt}` : ""}`;
+    }
+
     function toast(message) {
       const el = $("#toast");
       el.textContent = message;
@@ -3175,7 +3197,7 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
         return;
       }
 
-      subtitle.textContent = `@${viewer?.login || "you"} · ${fetchedAt ? new Date(fetchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}`;
+      renderInboxSubtitle();
 
       const renderCard = (item) => {
         const kindClass = item.kind === "review" ? "review" : "issue";
@@ -3305,6 +3327,7 @@ At the very end, output a fenced JSON block named HANDOFF with this exact shape:
 
     renderSessions();
     renderInboxBadge();
+    window.setInterval(renderInboxSubtitle, 30000);
     checkHealth().then(async () => {
       await loadSessionHistory();
       if (state.health?.config?.github?.configured) loadInbox();
