@@ -60,13 +60,29 @@ struct HomeView: View {
     }
 
     private func connectionBanner(_ message: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(Color.riskAlert)
-            Text(message)
-                .font(LoupeFont.caption)
-                .foregroundStyle(Color.textSecondary)
-            Spacer()
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Color.riskAlert)
+                Text(message)
+                    .font(LoupeFont.caption)
+                    .foregroundStyle(Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+            }
+            HStack(spacing: 8) {
+                Button("Retry") { Task { await store.refresh() } }
+                    .font(LoupeFont.caption)
+                    .foregroundStyle(Color.textPrimary)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(Capsule().fill(Color.chipFill))
+                Button("Re-pair Mac") { store.unpair() }
+                    .font(LoupeFont.caption)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(Capsule().fill(Color.accent))
+                Spacer()
+            }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: LoupeRadius.control).fill(Color.surface))
