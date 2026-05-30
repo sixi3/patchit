@@ -784,9 +784,18 @@ const mimeTypes = {
   ".md": "text/markdown; charset=utf-8"
 };
 
+// Public URL from a Cloudflare quick tunnel, when one is running. Lets the
+// phone pair from any network. Null until the tunnel is up (or if disabled).
+let tunnelUrl = null;
+
 function getNetworkUrls() {
   const interfaces = os.networkInterfaces();
-  const urls = [`http://localhost:${PORT}/index.html`];
+  const urls = [];
+
+  // A public tunnel URL is the most useful first entry when present.
+  if (tunnelUrl) urls.push(`${tunnelUrl}/index.html`);
+
+  urls.push(`http://localhost:${PORT}/index.html`);
 
   for (const entries of Object.values(interfaces)) {
     for (const entry of entries || []) {
@@ -801,6 +810,57 @@ function getNetworkUrls() {
 
 function getPairingUrls() {
   return getNetworkUrls().map((url) => `${url}?pair=${encodeURIComponent(config.apiToken)}`);
+}
+
+// The single best pairing URL to encode in the QR: tunnel if present, else LAN.
+function getPrimaryPairingUrl() {
+  const urls = getPairingUrls();
+  return urls.find((u) => u.startsWith("https://")) || urls.find((u) => !u.includes("localhost")) || urls[0];
+}
+
+// Start a Cloudflare quick tunnel via the `cloudflared` binary. Additive and
+// optional: enabled with LOUPE_TUNNEL=1. No-op (logs a hint) if cloudflared is
+// not installed. Does NOT change the auth model — the same pair token is used.
+function startTunnel() {
+  if (process.env.LOUPE_TUNNEL !== "1") return;
+  const probe = spawnSync("cloudflared", ["--version"], { encoding: "utf8" });
+  if (probe.status !== 0) {
+    console.log("LOUPE_TUNNEL=1 set but `cloudflared` is not installed.");
+    console.log("  Install with: brew install cloudflared");
+    return;
+  }
+  const child = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${PORT}`], {
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  const onData = (buf) => {
+    const text = buf.toString();
+    const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
+    if (match && !tunnelUrl) {
+      tunnelUrl = match[0];
+      console.log(`\nPublic tunnel ready: ${tunnelUrl}`);
+      console.log("Scan to pair from any network:");
+      renderQr(getPrimaryPairingUrl());
+    }
+  };
+  child.stdout.on("data", onData);
+  child.stderr.on("data", onData); // cloudflared logs the URL to stderr
+  child.on("exit", (code) => {
+    console.log(`cloudflared tunnel exited (code ${code}). Pairing falls back to LAN.`);
+    tunnelUrl = null;
+  });
+  process.on("exit", () => child.kill());
+}
+
+// Render a QR code in the terminal. Uses the `qrencode` CLI if available
+// (brew install qrencode); otherwise prints the URL to copy/paste.
+function renderQr(text) {
+  const q = spawnSync("qrencode", ["-t", "ANSIUTF8", "-m", "1", text], { encoding: "utf8" });
+  if (q.status === 0 && q.stdout) {
+    console.log(q.stdout);
+  } else {
+    console.log(`  (install qrencode for a scannable code: brew install qrencode)`);
+    console.log(`  ${text}`);
+  }
 }
 
 function getConfiguredWorkspaces() {
@@ -2991,6 +3051,11 @@ function startServer() {
     for (const url of getPairingUrls()) {
       console.log(`  ${url}`);
     }
+    // Scan-to-pair QR for the LAN URL immediately; the tunnel prints its own
+    // QR once it connects.
+    console.log("\nScan to pair this phone:");
+    renderQr(getPrimaryPairingUrl());
+    startTunnel();
   });
 }
 

@@ -20,3 +20,6 @@ yarn-error.log*
 *.log
 .env
 .env.*
+
+# Abandoned React Native attempt (superseded by loupe-swiftui)
+loupe-ios/
