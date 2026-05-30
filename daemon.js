@@ -523,7 +523,11 @@ async function fetchGithubInbox(token) {
       blueprint: null
     };
     if (kind === "issue" && workspace) {
-      ticket.blueprint = readCachedBlueprintForTicket(ticket, workspace) || enqueueBlueprintForTicket(ticket, workspace);
+      // A cached blueprint generated against a different repo HEAD is unreliable
+      // (it may reference files that didn't exist yet, or miss new ones). Treat a
+      // stale blueprint like a missing one and regenerate against the current HEAD.
+      const cached = readCachedBlueprintForTicket(ticket, workspace);
+      ticket.blueprint = (cached && !cached.stale) ? cached : enqueueBlueprintForTicket(ticket, workspace);
     }
     return ticket;
   }
