@@ -2000,6 +2000,9 @@ function publicBlueprint(blueprint) {
     missing_info: blueprint.missingInfo || [],
     default_agent: blueprint.defaultAgent || null,
     blueprint_confidence: blueprint.blueprintConfidence ?? blueprint.confidence ?? null,
+    // Degraded = real planner failed and we fell back to ticket-text heuristics.
+    // The card must show this rather than presenting it as a confident $0 plan.
+    degraded: blueprint.provider === "local-heuristic" || blueprint.model === "local-heuristic",
     stale_reason: blueprint.staleReason || null,
     repo_sha: blueprint.repoSha || null,
     ticket_hash: blueprint.ticketHash || null,
