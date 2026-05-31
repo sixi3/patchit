@@ -7,6 +7,7 @@ struct SessionView: View {
     let pairing: Pairing
     @Environment(\.dismiss) private var dismiss
     @State private var reviewRef: SessionStore.PRRef?
+    @State private var blocks: [TranscriptBlock] = []
 
     var body: some View {
         ZStack {
@@ -50,8 +51,6 @@ struct SessionView: View {
         .padding(LoupeSpace.lg)
     }
 
-    private var blocks: [TranscriptBlock] { TranscriptBlock.build(from: store.events) }
-
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -68,8 +67,13 @@ struct SessionView: View {
                 }
                 .padding(LoupeSpace.lg)
             }
+            .onAppear {
+                blocks = TranscriptBlock.build(from: store.events)
+            }
             .onChange(of: store.events.count) {
-                if let last = blocks.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+                let updatedBlocks = TranscriptBlock.build(from: store.events)
+                blocks = updatedBlocks
+                if let last = updatedBlocks.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
             }
         }
     }
@@ -276,7 +280,7 @@ private struct ThinkingAccordion: View {
             .buttonStyle(.plain)
 
             if expanded {
-                VStack(alignment: .leading, spacing: 6) {
+                LazyVStack(alignment: .leading, spacing: 6) {
                     ForEach(events) { event in
                         HStack(alignment: .top, spacing: 6) {
                             Circle().fill(Color.textMuted.opacity(0.5)).frame(width: 4, height: 4).padding(.top, 6)
