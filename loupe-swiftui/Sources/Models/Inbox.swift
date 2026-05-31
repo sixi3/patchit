@@ -185,6 +185,19 @@ struct Blueprint: Codable {
     }
 }
 
+// MARK: Review-requested PR (the PRs tab)
+struct PRSummary: Identifiable, Hashable {
+    let owner: String
+    let repo: String
+    let number: Int
+    let title: String
+    let author: String?
+    let updatedAt: String
+    var id: String { "\(owner)/\(repo)#\(number)" }
+    var repoLabel: String { "/\(owner)/\(repo)" }
+    var reference: String { "#\(number)" }
+}
+
 // MARK: Inbox item (blueprint + issue metadata)
 struct InboxItem: Identifiable {
     let id: String

@@ -208,3 +208,95 @@ struct InboxCountBadge: View {
     }
 }
 
+// MARK: - Home tabs
+enum HomeTab: String, CaseIterable, Identifiable {
+    case tickets, prs
+    var id: String { rawValue }
+    var title: String { self == .tickets ? "Tickets" : "PRs" }
+}
+
+// Liquid-glass segmented switcher with a sliding selection pill.
+struct GlassTabSwitcher: View {
+    @Binding var selection: HomeTab
+    var ticketCount: Int
+    var prCount: Int
+    @Namespace private var ns
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(HomeTab.allCases) { tab in
+                segment(tab)
+            }
+        }
+        .padding(4)
+        .loupeGlassCapsule()
+    }
+
+    private func segment(_ tab: HomeTab) -> some View {
+        let selected = selection == tab
+        let count = tab == .tickets ? ticketCount : prCount
+        return Button {
+            withAnimation(.snappy(duration: 0.3)) { selection = tab }
+        } label: {
+            HStack(spacing: 6) {
+                Text(tab.title).font(LoupeFont.bodyMedium)
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(selected ? .white : Color.textMuted)
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background(Capsule().fill(selected ? Color.accent : Color.chipFill))
+                }
+            }
+            .foregroundStyle(selected ? Color.textPrimary : Color.textMuted)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background {
+                if selected {
+                    Capsule().fill(Color.surface)
+                        .matchedGeometryEffect(id: "tabPill", in: ns)
+                        .shadow(color: .black.opacity(0.06), radius: 5, y: 2)
+                }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - PRRow (PRs tab)
+struct PRRow: View {
+    let pr: PRSummary
+    var onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.triangle.pull")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Color.accent)
+                    .frame(width: 26)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(pr.reference).font(LoupeFont.code).foregroundStyle(Color.textSecondary)
+                        RepoPill(repo: pr.repoLabel)
+                    }
+                    Text(pr.title)
+                        .font(LoupeFont.bodyMedium).foregroundStyle(Color.textPrimary)
+                        .lineLimit(2).multilineTextAlignment(.leading)
+                    if let author = pr.author {
+                        Text("by \(author) · \(pr.updatedAt)")
+                            .font(LoupeFont.caption).foregroundStyle(Color.textMuted)
+                    }
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold)).foregroundStyle(Color.textMuted)
+            }
+            .padding(LoupeSpace.lg)
+            .background(Color.surface)
+        }
+        .buttonStyle(.plain)
+    }
+}
+

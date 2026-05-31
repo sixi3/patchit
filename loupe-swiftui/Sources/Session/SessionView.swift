@@ -121,9 +121,9 @@ private extension SessionEvent {
         switch type {
         case "agent_message":        return .message
         case "claude":               return kind == "message" ? .message : .thinking
-        case "thinking", "action", "codex", "stdout", "status", "command":
+        case "thinking", "action", "codex", "stdout", "stderr", "status", "command":
             return .thinking
-        case "error", "stderr":      return .error
+        case "error":                return .error
         case "branch":
             return ["committed", "pr_ready", "compare", "pr_failed"].contains(kind ?? "") ? .milestone : .thinking
         case "user_message", "done", "handoff":
@@ -136,8 +136,9 @@ private extension SessionEvent {
     var stepText: String {
         if let text, !text.isEmpty { return text }
         switch type {
-        case "status": return status.map { "Status: \($0)" } ?? "Working…"
-        default:       return type
+        case "status":          return status.map { "Status: \($0)" } ?? "Working…"
+        case "codex", "stdout": return "Working…"
+        default:                return type
         }
     }
 }

@@ -107,10 +107,10 @@ final class SessionStore: Identifiable {
                         }
                     }
                     if event.type == "done" {
-                        if event.status != "completed", let err = self.lastError {
-                            self.phase = .failed(err)
+                        if event.status == "completed" {
+                            self.phase = .completed(success: true)
                         } else {
-                            self.phase = .completed(success: event.status == "completed")
+                            self.phase = .failed(self.lastError ?? "The agent run did not complete.")
                         }
                     }
                 }

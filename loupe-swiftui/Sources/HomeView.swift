@@ -10,6 +10,8 @@ struct HomeView: View {
     @State private var notPairedAlert = false
     @State private var showWorkstationPicker = false
     @State private var showSessions = false
+    @State private var homeTab: HomeTab = .tickets
+    @State private var reviewPR: SessionStore.PRRef?
 
     /// Hide tickets whose dispatch is in flight or done (failed ones return).
     private var items: [InboxItem] {
@@ -29,31 +31,12 @@ struct HomeView: View {
                             .padding(.horizontal, LoupeSpace.screenInset)
                     }
 
-                    if case .loading = store.phase, items.isEmpty {
-                        statePanel(
-                            title: "Loading inbox",
-                            message: "Fetching assigned GitHub issues from your Mac.",
-                            systemImage: "arrow.clockwise"
-                        )
-                        .padding(.horizontal, LoupeSpace.screenInset)
-                    } else if case .loaded = store.phase, items.isEmpty {
-                        statePanel(
-                            title: "Inbox is clear",
-                            message: "Assigned GitHub issues will appear here when they are ready to dispatch.",
-                            systemImage: "checkmark.circle.fill"
-                        )
-                        .padding(.horizontal, LoupeSpace.screenInset)
-                    }
-
-                    ForEach(items) { item in
-                        TicketCard(
-                            item: item,
-                            onDispatch: { dispatch(item, harness: $0) },
-                            onRefreshBlueprint: { store.refreshBlueprint(item) }
-                        )
-                        .transition(.flyToPill)
+                    switch homeTab {
+                    case .tickets: ticketsContent
+                    case .prs:     prsContent
                     }
                 }
+                .animation(.snappy(duration: 0.28), value: homeTab)
                 .padding(.bottom, LoupeSpace.xxl)
             }
             .refreshable {
@@ -91,6 +74,11 @@ struct HomeView: View {
         .sheet(isPresented: $showSessions) {
             if let pairing = store.pairing {
                 SessionsListView(sessions: sessions, pairing: pairing)
+            }
+        }
+        .fullScreenCover(item: $reviewPR) { ref in
+            if let pairing = store.pairing {
+                PRReviewView(store: PRReviewStore(ref: ref, pairing: pairing))
             }
         }
         .onDisappear { pendingDispatchTask?.cancel() }
@@ -135,6 +123,45 @@ struct HomeView: View {
             sessions.dispatch(item: item, harness: harness, pairing: pairing)
         }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    }
+
+    @ViewBuilder
+    private var ticketsContent: some View {
+        if case .loading = store.phase, items.isEmpty {
+            statePanel(title: "Loading inbox",
+                       message: "Fetching assigned GitHub issues from your Mac.",
+                       systemImage: "arrow.clockwise")
+                .padding(.horizontal, LoupeSpace.screenInset)
+        } else if case .loaded = store.phase, items.isEmpty {
+            statePanel(title: "Inbox is clear",
+                       message: "Assigned GitHub issues will appear here when they are ready to dispatch.",
+                       systemImage: "checkmark.circle.fill")
+                .padding(.horizontal, LoupeSpace.screenInset)
+        }
+        ForEach(items) { item in
+            TicketCard(
+                item: item,
+                onDispatch: { dispatch(item, harness: $0) },
+                onRefreshBlueprint: { store.refreshBlueprint(item) }
+            )
+            .transition(.flyToPill)
+        }
+    }
+
+    @ViewBuilder
+    private var prsContent: some View {
+        if store.prs.isEmpty {
+            statePanel(title: "No PRs to review",
+                       message: "Pull requests where your review is requested will appear here.",
+                       systemImage: "arrow.triangle.pull")
+                .padding(.horizontal, LoupeSpace.screenInset)
+        } else {
+            ForEach(store.prs) { pr in
+                PRRow(pr: pr) {
+                    reviewPR = SessionStore.PRRef(owner: pr.owner, repo: pr.repo, number: pr.number)
+                }
+            }
+        }
     }
 
     private func connectionBanner(_ message: String) -> some View {
@@ -196,6 +223,9 @@ struct HomeView: View {
                 .padding(.horizontal, LoupeSpace.screenInset)
             inboxHeader
                 .padding(.horizontal, LoupeSpace.screenInset)
+            GlassTabSwitcher(selection: $homeTab, ticketCount: items.count, prCount: store.prs.count)
+                .padding(.horizontal, LoupeSpace.screenInset)
+                .padding(.bottom, 10)
         }
     }
 

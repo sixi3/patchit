@@ -16,6 +16,7 @@ final class InboxStore {
     }
 
     private(set) var items: [InboxItem] = SampleInbox.items
+    private(set) var prs: [PRSummary] = []
     private(set) var phase: Phase = .unpaired
     private(set) var workstation: String = "Anands-Mac-mini.local"
     private(set) var onlineAgents: [Agent] = [.codex, .claude]
@@ -64,6 +65,13 @@ final class InboxStore {
             }
             let payload = try await client.inbox()
             items = payload.assigned.map { $0.toInboxItem() }
+            prs = payload.reviews.compactMap { t in
+                let parts = t.repo.split(separator: "/", maxSplits: 1).map(String.init)
+                guard parts.count == 2 else { return nil }
+                return PRSummary(owner: parts[0], repo: parts[1], number: t.number,
+                                 title: t.title, author: t.author,
+                                 updatedAt: DaemonTicket.relativeTime(t.updatedAt))
+            }
             lastSynced = Date()
             githubConnected = true
             phase = .loaded
