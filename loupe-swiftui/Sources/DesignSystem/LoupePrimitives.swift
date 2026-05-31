@@ -44,14 +44,20 @@ struct ConfidenceRing: View {
 
     var body: some View {
         ZStack {
-            Circle().stroke(Color.hairline, lineWidth: LoupeStroke.ring)
+            Circle()
+                .stroke(Color.hairline, lineWidth: LoupeStroke.ringTrack)
             Circle()
                 .trim(from: 0, to: CGFloat(max(0, min(100, value))) / 100)
-                .stroke(color, style: StrokeStyle(lineWidth: LoupeStroke.ring, lineCap: .round))
+                .stroke(
+                    color,
+                    style: StrokeStyle(lineWidth: LoupeStroke.ringProgress, lineCap: .round)
+                )
                 .rotationEffect(.degrees(-90))
             Text("\(value)")
                 .font(LoupeFont.ringValue)
+                .monospacedDigit()
                 .foregroundStyle(Color.textPrimary)
+                .offset(y: 1)
         }
         .frame(width: diameter, height: diameter)
         .accessibilityLabel("Confidence \(value) percent")

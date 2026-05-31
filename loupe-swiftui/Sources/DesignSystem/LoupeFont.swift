@@ -58,7 +58,8 @@ enum LoupeFont {
     // Data — Space Mono
     static let code       = mono(13.5, bold: false) // GH-101, file names, repo path
     static let codeStrong = mono(13.5, bold: true)
-    static let ringValue  = mono(13, bold: true)    // confidence number
+    static let ringValue  = mono(11, bold: true)    // confidence number
+    static let costStrip  = mono(11, bold: false)   // ~$low-$high on repo row
     static let metric     = mono(15, bold: true)    // folder/siren counts
 }
 

@@ -48,97 +48,139 @@ struct PriorityGlyphs: View {
 // MARK: - RepoPill
 struct RepoPill: View {
     let repo: String
+
+    private enum Metrics {
+        static let height: CGFloat = 20
+        static let iconBox: CGFloat = 11
+    }
+
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(alignment: .center, spacing: 4) {
             Image(systemName: "arrow.triangle.branch")        // → Ph.gitBranch
-                .font(.system(size: 11, weight: .bold))
-            Text(repo).font(LoupeFont.code)
+                .font(.system(size: 9, weight: .bold))
+                .frame(width: Metrics.iconBox, height: Metrics.iconBox)
+            Text(repo)
+                .font(LoupeFont.caption)
+                .lineLimit(1)
+                .offset(y: -0.5)
         }
         .foregroundStyle(Color.textSecondary)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 7)
+        .frame(height: Metrics.height, alignment: .center)
         .background(Capsule().fill(Color.chipFill))
     }
 }
 
-// MARK: - MetricStat
-// Folder/siren counts under the summary.
-struct MetricStat: View {
+// MARK: - MetricTab
+// Selectable folder / risk chips; drives the detail panel on TicketCard.
+struct MetricTab: View {
     let symbol: String
     let tint: Color
     let value: Int
+    let isSelected: Bool
+    let action: () -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(tint)
-            Text("\(value)")
-                .font(LoupeFont.metric)
-                .foregroundStyle(Color.textPrimary)
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(tint)
+                Text("\(value)")
+                    .font(LoupeFont.metric)
+                    .foregroundStyle(isSelected ? Color.textPrimary : Color.textSecondary)
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: LoupeRadius.chip)
+                        .fill(Color.chipFill)
+                }
+            }
         }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: LoupeRadius.chip).fill(Color.chipFill))
-    }
-}
-
-struct CostStat: View {
-    let value: String
-
-    init(_ value: String) {
-        self.value = value
-    }
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "dollarsign.circle.fill")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.accent)
-            Text(value)
-                .font(LoupeFont.metric)
-                .foregroundStyle(Color.textPrimary)
-        }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: LoupeRadius.chip).fill(Color.chipFill))
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
 // MARK: - FileChip
 struct FileChip: View {
     let path: String
-    private var kind: FileKind { FileKind.from(path) }
     private var name: String { (path as NSString).lastPathComponent }
 
     var body: some View {
-        HStack(spacing: 5) {
-            Image(systemName: kind.sfSymbol)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(kind.tint)
+        HStack(alignment: .center, spacing: 0) {
+            SetiIconView(path: path, size: LoupeSize.fileIcon)
             Text(name)
-                .font(LoupeFont.code)
+                .font(LoupeFont.label)
+                .foregroundStyle(Color.textPrimary)
+                .lineLimit(1)
+                .offset(y: -1.2)
+        }
+    }
+}
+
+// MARK: - FilesRow
+// Single-line file chips; scrolls horizontally across the full ticket width.
+struct FilesRow: View {
+    let files: [BlueprintFile]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(files.enumerated()), id: \.element.id) { idx, file in
+                    HStack(spacing: 8) {
+                        if idx > 0 {
+                            Circle().fill(Color.textMuted.opacity(0.5)).frame(width: 3, height: 3)
+                        }
+                        FileChip(path: file.path)
+                            .fixedSize()
+                    }
+                }
+            }
+            .padding(.horizontal, LoupeSpace.lg)
+        }
+        .padding(.horizontal, -LoupeSpace.lg)
+    }
+}
+
+// MARK: - RisksRow
+struct RiskChip: View {
+    let area: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "light.beacon.max.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.riskAlert)
+            Text(area)
+                .font(LoupeFont.label)
                 .foregroundStyle(Color.textPrimary)
                 .lineLimit(1)
         }
     }
 }
 
-// MARK: - FlowingFiles
-// Wraps file chips with a leading dot separator like the screenshot.
-struct FilesRow: View {
-    let files: [BlueprintFile]
+struct RisksRow: View {
+    let areas: [String]
+
     var body: some View {
-        FlowLayout(spacing: 8) {
-            ForEach(Array(files.enumerated()), id: \.element.id) { idx, file in
-                HStack(spacing: 8) {
-                    if idx > 0 {
-                        Circle().fill(Color.textMuted.opacity(0.5)).frame(width: 3, height: 3)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(areas.enumerated()), id: \.offset) { idx, area in
+                    HStack(spacing: 8) {
+                        if idx > 0 {
+                            Circle().fill(Color.textMuted.opacity(0.5)).frame(width: 3, height: 3)
+                        }
+                        RiskChip(area: area)
+                            .fixedSize()
                     }
-                    FileChip(path: file.path)
                 }
             }
+            .padding(.horizontal, LoupeSpace.lg)
         }
+        .padding(.horizontal, -LoupeSpace.lg)
     }
 }
 
@@ -155,38 +197,3 @@ struct InboxCountBadge: View {
     }
 }
 
-// MARK: - FlowLayout (carried over — wraps chips correctly)
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 8
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        arrange(subviews: subviews, proposalWidth: proposal.width ?? 0).size
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let arrangement = arrange(subviews: subviews, proposalWidth: bounds.width)
-        for item in arrangement.items {
-            subviews[item.index].place(
-                at: CGPoint(x: bounds.minX + item.origin.x, y: bounds.minY + item.origin.y),
-                proposal: ProposedViewSize(item.size)
-            )
-        }
-    }
-
-    private func arrange(subviews: Subviews, proposalWidth: CGFloat) -> (items: [(index: Int, origin: CGPoint, size: CGSize)], size: CGSize) {
-        var items: [(Int, CGPoint, CGSize)] = []
-        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
-        let maxWidth = max(proposalWidth, 1)
-
-        for index in subviews.indices {
-            let size = subviews[index].sizeThatFits(.unspecified)
-            if x > 0, x + size.width > maxWidth {
-                x = 0; y += rowHeight + spacing; rowHeight = 0
-            }
-            items.append((index, CGPoint(x: x, y: y), size))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
-        return (items, CGSize(width: maxWidth, height: y + rowHeight))
-    }
-}

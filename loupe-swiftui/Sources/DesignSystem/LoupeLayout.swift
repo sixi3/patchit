@@ -30,8 +30,9 @@ enum LoupeSize {
     static let avatar:        CGFloat = 40   // glass
     static let statusDot:     CGFloat = 8
     static let caret:         CGFloat = 20
-    static let ring:          CGFloat = 46   // confidence ring
+    static let ring:          CGFloat = 32   // confidence ring
     static let agentBadge:    CGFloat = 22   // notification/agent glyph circle
+    static let fileIcon:      CGFloat = 22   // Seti file-type glyph in file chips (~13.5pt code)
     static let rail:          CGFloat = 3    // priority left rail
     static let kebab:         CGFloat = 48
 }
@@ -39,5 +40,6 @@ enum LoupeSize {
 enum LoupeStroke {
     static let hairline: CGFloat = 1
     static let card:     CGFloat = 1
-    static let ring:     CGFloat = 4
+    static let ringTrack:    CGFloat = 0.5  // confidence ring background
+    static let ringProgress: CGFloat = 3.5  // confidence arc (upper stroke)
 }

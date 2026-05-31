@@ -204,17 +204,18 @@ struct InboxItem: Identifiable {
     /// Agent the dispatch button targets.
     var targetAgent: Agent { blueprint.defaultAgent ?? .codex }
 
-    var costLabel: String? {
+    /// Compact estimate for the repo strip, e.g. `~$0.42-$1.20`.
+    var costStripLabel: String? {
         if let total = blueprint.costEstimate?.total,
            let low = total.lowUsd,
            let high = total.highUsd {
             if abs(low - high) < 0.005 {
-                return String(format: "$%.2f", low)
+                return String(format: "~$%.2f", low)
             }
-            return String(format: "$%.2f–%.2f", low, high)
+            return String(format: "~$%.2f-$%.2f", low, high)
         }
         if let actual = blueprint.costEstimate?.blueprint?.actualUsd {
-            return String(format: "$%.2f", actual)
+            return String(format: "~$%.2f", actual)
         }
         return nil
     }
