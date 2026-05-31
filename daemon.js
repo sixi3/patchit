@@ -523,11 +523,16 @@ async function fetchGithubInbox(token) {
       blueprint: null
     };
     if (kind === "issue" && workspace) {
-      // A cached blueprint generated against a different repo HEAD is unreliable
-      // (it may reference files that didn't exist yet, or miss new ones). Treat a
-      // stale blueprint like a missing one and regenerate against the current HEAD.
+      // Generate ONCE, on first sight. Never auto-regenerate. If the files this
+      // Blueprint references change later, surface a stale badge and let the user
+      // decide to refresh — generation is expensive and should be deliberate.
       const cached = readCachedBlueprintForTicket(ticket, workspace);
-      ticket.blueprint = (cached && !cached.stale) ? cached : enqueueBlueprintForTicket(ticket, workspace);
+      if (cached) {
+        annotateStaleness(cached, workspace);
+        ticket.blueprint = cached;
+      } else {
+        ticket.blueprint = enqueueBlueprintForTicket(ticket, workspace);
+      }
     }
     return ticket;
   }
@@ -1556,7 +1561,9 @@ function loadBlueprintArtifacts() {
 function blueprintCachePath(ticket, workspace) {
   const binding = workspaceRepoBinding(workspace);
   const repoName = safeCacheName(ticket.repo || (binding ? `${binding.owner}-${binding.repo}` : workspace.name));
-  return path.join(BLUEPRINT_CACHE_DIR, `${repoName}.${ticketHash(ticket)}.${safeCacheName(repoHeadSha(workspace))}.json`);
+  // Key by (repo, ticket) only — NOT repo HEAD — so a Blueprint persists across
+  // commits. Staleness vs the current HEAD is computed separately, at file level.
+  return path.join(BLUEPRINT_CACHE_DIR, `${repoName}.${ticketHash(ticket)}.json`);
 }
 
 function blueprintCachePrefix(ticket, workspace) {
@@ -1576,6 +1583,10 @@ function readBlueprintCacheFile(filePath, ticket, workspace, { stale = false } =
     durationMs: cached.durationMs ?? cached._duration_ms,
     model: cached.model || cached._model
   });
+  if (cached.degraded) {
+    blueprint.degraded = true;
+    blueprint.degradedReason = cached.degradedReason || "This is a rough estimate; tap refresh to retry full analysis.";
+  }
   if (stale) {
     blueprint.stale = true;
     blueprint.staleReason = "Repo HEAD changed since this Blueprint was generated.";
@@ -1739,6 +1750,33 @@ function pumpBlueprintQueue() {
   }
 }
 
+// File-level staleness: a Blueprint is "stale" only if a file it actually
+// references changed between its generation HEAD and the current HEAD. Unrelated
+// commits do NOT invalidate it. This sets a badge; it never regenerates.
+function annotateStaleness(blueprint, workspace) {
+  blueprint.stale = false;
+  blueprint.staleFiles = [];
+  const genSha = blueprint.repoSha;
+  if (!genSha) return;
+  let currentSha;
+  try { currentSha = repoHeadSha(workspace); } catch { return; }
+  if (!currentSha || genSha === currentSha) return;
+  const files = (blueprint.files || []).map((f) => f.path).filter(Boolean);
+  if (!files.length) return;
+  try {
+    const out = spawnSync("git", ["-C", workspace.path, "diff", "--name-only", genSha, currentSha],
+      { timeout: 3000, encoding: "utf8" });
+    if (out.status !== 0) return;
+    const changed = new Set(out.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean));
+    const hit = files.filter((f) => changed.has(f));
+    if (hit.length) {
+      blueprint.stale = true;
+      blueprint.staleFiles = hit;
+      blueprint.staleReason = `${hit.length} tracked file${hit.length > 1 ? "s" : ""} changed since this Blueprint was generated.`;
+    }
+  } catch {}
+}
+
 function renderBlueprintPrompt(ticket, workspace) {
   const { prompt, schema } = loadBlueprintArtifacts();
   const systemPrompt = prompt
@@ -1868,6 +1906,18 @@ function blueprintModelAlias() {
 }
 function executionModelAlias() {
   return process.env.LOUPE_EXECUTION_MODEL || config.models?.execution || "sonnet";
+}
+// Hybrid blueprint routing: Sonnet for routine tickets (cheap), Opus only when
+// the ticket touches a risk area where a wrong plan is costly. Override via
+// LOUPE_BLUEPRINT_MODEL or config.models.blueprint.
+function blueprintModelForTicket(ticket) {
+  const override = process.env.LOUPE_BLUEPRINT_MODEL || config.models?.blueprint;
+  if (override) return override;
+  const hay = `${(ticket?.labels || []).join(" ")} ${ticket?.title || ""} ${ticket?.body || ""}`.toLowerCase();
+  const risky = ["auth", "login", "password", "token", "oauth", "payment", "billing",
+    "stripe", "charge", "refund", "security", "vulnerab", "migration", "schema",
+    "encrypt", "crypto", "permission", "privacy", "pii"].some((k) => hay.includes(k));
+  return risky ? "opus" : "sonnet";
 }
 // Exact cost from token usage (used for the MEASURED blueprint cost).
 function usdFromUsage(model, usage) {
@@ -2057,22 +2107,24 @@ class ClaudeCliProvider extends PlanningProvider {
   isAvailable() {
     return !!getHarness("claude-code")?.available;
   }
-  async generateBlueprint({ systemPrompt, schema, userPrompt, cwd }) {
+  async generateBlueprint({ systemPrompt, schema, userPrompt, cwd, ticket }) {
     const schemaPath = path.join(LOUPE_HOME, "schemas", "blueprint.schema.json");
     fs.mkdirSync(path.dirname(schemaPath), { recursive: true });
     fs.writeFileSync(schemaPath, JSON.stringify(schema));
     try { fs.chmodSync(schemaPath, 0o600); } catch {}
 
+    const model = blueprintModelForTicket(ticket);
     const args = [
       "-p", userPrompt,
       "--append-system-prompt", systemPrompt,
       "--output-format", "json",
       "--json-schema", JSON.stringify(schema),
-      "--model", blueprintModelAlias(),
+      "--model", model,
       "--permission-mode", "dontAsk",
       "--allowedTools", "Read,Glob,Grep",
       "--add-dir", cwd,
-      "--max-turns", "15"
+      // Fewer turns = less context re-sent each turn = much lower cost.
+      "--max-turns", "8"
     ];
     const { stdout } = await runCapture(CLAUDE_BIN, args, cwd, { timeout: 120_000 });
     const parsed = JSON.parse(stdout);
@@ -2091,8 +2143,8 @@ class ClaudeCliProvider extends PlanningProvider {
       cost_usd: parsed.total_cost_usd ?? null,
       usage: parsed.usage ?? null,
       duration_ms: parsed.duration_ms ?? null,
-      // CLI often omits the model in JSON output; fall back to the alias we routed.
-      model: parsed.model ?? blueprintModelAlias(),
+      // CLI often omits the model in JSON output; fall back to the one we routed.
+      model: parsed.model ?? model,
       provider: this.id
     };
   }
@@ -2378,7 +2430,15 @@ async function createBlueprint(ticket, workspaceId, requestedHarness, { bypassCa
     blueprint.riskAreas = inferred.riskAreas;
     blueprint.risks = inferred.risks;
   }
+  // Surface a degraded blueprint honestly instead of letting the heuristic
+  // fallback masquerade as a confident result (the old conf-0.72 problem).
+  if ((result.provider || provider.id) === "local-heuristic") {
+    blueprint.degraded = true;
+    blueprint.degradedReason = "Full analysis didn't run; this is a rough estimate from the ticket text. Tap refresh to retry.";
+  }
   fs.writeFileSync(cachePath, JSON.stringify({
+    degraded: blueprint.degraded || false,
+    degradedReason: blueprint.degradedReason || null,
     outcome: blueprint.outcome,
     missing_info: blueprint.missingInfo,
     summary: blueprint.summary,
