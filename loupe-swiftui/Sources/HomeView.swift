@@ -52,7 +52,12 @@ struct HomeView: View {
                 }
                 .padding(.bottom, LoupeSpace.xxl)
             }
-            .refreshable { await store.refresh() }
+            .refreshable {
+                let haptic = UIImpactFeedbackGenerator(style: .light)
+                haptic.prepare()
+                haptic.impactOccurred()
+                await store.refresh()
+            }
             .loupeStickyTopBar { stickyHeader }
         }
         .task {
