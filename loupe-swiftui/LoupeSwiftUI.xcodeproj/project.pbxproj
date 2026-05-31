@@ -3,24 +3,216 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 70;
+	objectVersion = 63;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		0760C3D9D1C9A06C952E59F8 /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B14AC3824481DBA69409424 /* SessionStore.swift */; };
+		07F1F5D75E2761DFC779ECB3 /* DaemonModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 420363FB7913DCEA3F7C8AF8 /* DaemonModels.swift */; };
+		1E5BECC0BDB652CC6BD77096 /* LoupeFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = F225D8B8621DD3673E2D8920 /* LoupeFont.swift */; };
+		2031612EE11CB3793DB39B6B /* InboxStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09A9E0F843AD9CAFA2E72F93 /* InboxStore.swift */; };
+		2ACF295C7BE51A9B9E2A7EE9 /* ConnectGitHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 770EED573AF2AADB041B0B08 /* ConnectGitHubView.swift */; };
+		2FE5F1E6C97F115DDC6EB399 /* SetiIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = B41B85BACAEFF94E8457438F /* SetiIcon.swift */; };
+		34FDCC4BCA9FBA936B3FB19C /* PRReviewStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08E6B8A5D3A84A9D853C12D3 /* PRReviewStore.swift */; };
+		3A74319985EA7383AB9A1987 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B26A1440D01EAE71FF81A7 /* PairingView.swift */; };
+		3D5E63ED0E44BB112B9CDC51 /* InboxComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 176DB1BB6131FEF54534B46A /* InboxComponents.swift */; };
+		4637D1FD967108CF5306D380 /* FamiljenGrotesk-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 198E86D28AADB7C806535F35 /* FamiljenGrotesk-Bold.ttf */; };
+		48E77D4F5B130E00E02034CF /* PRReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECA4134BBC32007B017BB137 /* PRReviewView.swift */; };
+		4B0DB0605CABFDD429C78212 /* FamiljenGrotesk-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 709D711FC37A2D4D4ED3C06E /* FamiljenGrotesk-Regular.ttf */; };
+		55BB46FE759D9AE181CA7E6E /* LoupeColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27400B8F785B4F005376C210 /* LoupeColor.swift */; };
+		61D7035041ADD00CA2204C7E /* GitHubModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2C4AB5AB0E8579E60501F50 /* GitHubModels.swift */; };
+		6F0982CCD5FAB572B7697F73 /* SummaryTruncation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C406DF69090A1785B66D09F /* SummaryTruncation.swift */; };
+		742D856DD6226A595FFA90E6 /* seti-associations.json in Resources */ = {isa = PBXBuildFile; fileRef = 9D0F5EF5B621E8259BD4E0B3 /* seti-associations.json */; };
+		74E2C1B73545041A4587EF55 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 967AC80B0A24BD1845B84D07 /* RootView.swift */; };
+		84BD2BC23F8ED2C7CD0FA21F /* SpaceMono-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = D1ED1C3EB71696004AAC8302 /* SpaceMono-Regular.ttf */; };
+		8648C08766F39FCBF15EC7F1 /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB66219C10D7BD35D8AAFD6A /* QRScannerView.swift */; };
+		8EA37D7B15AFC01F2A29F5F6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 21E89A612A8173BEE324422D /* Assets.xcassets */; };
+		8FBE4589036A5E324015B91C /* Keychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84B54DE2626630BB38D3FF21 /* Keychain.swift */; };
+		91A9E952C9DE97D733432202 /* LoupeSwiftUIApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7CDF81FFA139932EA4254EA /* LoupeSwiftUIApp.swift */; };
+		962F855AC2744192E94D43D8 /* FamiljenGrotesk-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = BE8AD7E06ED431D21895D57B /* FamiljenGrotesk-Medium.ttf */; };
+		976F424C1051835DF1465C02 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85A1752F2D8A0C9088C54C1C /* HomeView.swift */; };
+		9C24162114DB8C77D1B6BF29 /* LoupePriority.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8856A7B3F5ECE4A366D257C /* LoupePriority.swift */; };
+		A0460B62A16AAB1192AC240E /* TicketCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF321EBD0E8C2A263AC93236 /* TicketCard.swift */; };
+		A25BA02F5B7F8A3E71A7DC37 /* ExpandableSummaryText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DC703BB8FCF260EDB4DAA6E /* ExpandableSummaryText.swift */; };
+		A874DF126FBD7EDAF6E5E0E2 /* Pairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8234C1130251F2CF03CC14B2 /* Pairing.swift */; };
+		A9D988AFB47FA7D32E524EA0 /* FamiljenGrotesk-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 5EEA8BA42C6625FBCF3A60C1 /* FamiljenGrotesk-SemiBold.ttf */; };
+		B8DBAC0A733DC329E38AF098 /* SpaceMono-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FCA6C527C88E5FE4A4266109 /* SpaceMono-Bold.ttf */; };
+		B99C178F1359A3FA61C7DAB9 /* SessionModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CF24D3C39FD34F27A15871B /* SessionModels.swift */; };
+		BB966507C88FC198D6105A98 /* PRModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7F3B71576C727C3C0EBACC1 /* PRModels.swift */; };
+		C7BBD50D5561AEF0B78A549D /* TicketMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BD659A5AAE29E336B0822DF /* TicketMapping.swift */; };
+		CA91D7BDED9D37B54416F352 /* LoupeLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E2FFAAB6ACC439339FEF02A /* LoupeLayout.swift */; };
+		CF7127E7CEEC79330A28D177 /* LoupePrimitives.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D8C55F2497879F0162316D5 /* LoupePrimitives.swift */; };
+		D5260A0BA354CBFDFB79BB8F /* Inbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80E1E860055A3678C941B3D9 /* Inbox.swift */; };
+		DB9ECB82F8F40AEB13C75210 /* SampleInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C2F46CFA2F26E57A849FFF8 /* SampleInbox.swift */; };
+		E1F2148C3E4B412841F187E0 /* APIEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78B84E50F57E87414A8100B6 /* APIEnvelope.swift */; };
+		F095B5B5A68613D025ADD390 /* SessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D80FE5A376838AD37C6483A1 /* SessionView.swift */; };
+		F3855E521C00E08D7591E938 /* LoupeClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB753F4CF4535E16F396F6DE /* LoupeClient.swift */; };
+		F5053C3F3B00000F1625A16C /* LoupeGlass.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E663576961837B5D16E0834 /* LoupeGlass.swift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
+		08E6B8A5D3A84A9D853C12D3 /* PRReviewStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRReviewStore.swift; sourceTree = "<group>"; };
+		09A9E0F843AD9CAFA2E72F93 /* InboxStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxStore.swift; sourceTree = "<group>"; };
+		0C406DF69090A1785B66D09F /* SummaryTruncation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryTruncation.swift; sourceTree = "<group>"; };
+		0DC703BB8FCF260EDB4DAA6E /* ExpandableSummaryText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpandableSummaryText.swift; sourceTree = "<group>"; };
+		176DB1BB6131FEF54534B46A /* InboxComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxComponents.swift; sourceTree = "<group>"; };
+		198E86D28AADB7C806535F35 /* FamiljenGrotesk-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FamiljenGrotesk-Bold.ttf"; sourceTree = "<group>"; };
+		1E2FFAAB6ACC439339FEF02A /* LoupeLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoupeLayout.swift; sourceTree = "<group>"; };
+		21E89A612A8173BEE324422D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		27400B8F785B4F005376C210 /* LoupeColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoupeColor.swift; sourceTree = "<group>"; };
+		2D8C55F2497879F0162316D5 /* LoupePrimitives.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoupePrimitives.swift; sourceTree = "<group>"; };
+		3B14AC3824481DBA69409424 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
+		420363FB7913DCEA3F7C8AF8 /* DaemonModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonModels.swift; sourceTree = "<group>"; };
+		5BD659A5AAE29E336B0822DF /* TicketMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TicketMapping.swift; sourceTree = "<group>"; };
+		5C2F46CFA2F26E57A849FFF8 /* SampleInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleInbox.swift; sourceTree = "<group>"; };
+		5EEA8BA42C6625FBCF3A60C1 /* FamiljenGrotesk-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FamiljenGrotesk-SemiBold.ttf"; sourceTree = "<group>"; };
+		709D711FC37A2D4D4ED3C06E /* FamiljenGrotesk-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FamiljenGrotesk-Regular.ttf"; sourceTree = "<group>"; };
+		770EED573AF2AADB041B0B08 /* ConnectGitHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectGitHubView.swift; sourceTree = "<group>"; };
+		78B84E50F57E87414A8100B6 /* APIEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIEnvelope.swift; sourceTree = "<group>"; };
+		7CF24D3C39FD34F27A15871B /* SessionModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionModels.swift; sourceTree = "<group>"; };
+		7E663576961837B5D16E0834 /* LoupeGlass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoupeGlass.swift; sourceTree = "<group>"; };
+		80E1E860055A3678C941B3D9 /* Inbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Inbox.swift; sourceTree = "<group>"; };
+		8234C1130251F2CF03CC14B2 /* Pairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pairing.swift; sourceTree = "<group>"; };
+		84B54DE2626630BB38D3FF21 /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
+		85A1752F2D8A0C9088C54C1C /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		967AC80B0A24BD1845B84D07 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		9D0F5EF5B621E8259BD4E0B3 /* seti-associations.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "seti-associations.json"; sourceTree = "<group>"; };
 		AA1E9FA70B7AE21433DBF0F3 /* LoupeSwiftUI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LoupeSwiftUI.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AB66219C10D7BD35D8AAFD6A /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
+		B41B85BACAEFF94E8457438F /* SetiIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetiIcon.swift; sourceTree = "<group>"; };
+		B8856A7B3F5ECE4A366D257C /* LoupePriority.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoupePriority.swift; sourceTree = "<group>"; };
+		BE8AD7E06ED431D21895D57B /* FamiljenGrotesk-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FamiljenGrotesk-Medium.ttf"; sourceTree = "<group>"; };
+		C1B26A1440D01EAE71FF81A7 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		C2C4AB5AB0E8579E60501F50 /* GitHubModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubModels.swift; sourceTree = "<group>"; };
+		C7F3B71576C727C3C0EBACC1 /* PRModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRModels.swift; sourceTree = "<group>"; };
+		CF321EBD0E8C2A263AC93236 /* TicketCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TicketCard.swift; sourceTree = "<group>"; };
+		D1ED1C3EB71696004AAC8302 /* SpaceMono-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "SpaceMono-Regular.ttf"; sourceTree = "<group>"; };
+		D80FE5A376838AD37C6483A1 /* SessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionView.swift; sourceTree = "<group>"; };
+		ECA4134BBC32007B017BB137 /* PRReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRReviewView.swift; sourceTree = "<group>"; };
+		F225D8B8621DD3673E2D8920 /* LoupeFont.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoupeFont.swift; sourceTree = "<group>"; };
+		F7CDF81FFA139932EA4254EA /* LoupeSwiftUIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoupeSwiftUIApp.swift; sourceTree = "<group>"; };
+		FB753F4CF4535E16F396F6DE /* LoupeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoupeClient.swift; sourceTree = "<group>"; };
+		FCA6C527C88E5FE4A4266109 /* SpaceMono-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "SpaceMono-Bold.ttf"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedRootGroup section */
-		74567A0B801E12E77AA67788 /* Sources */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Sources; sourceTree = "<group>"; };
-/* End PBXFileSystemSynchronizedRootGroup section */
-
 /* Begin PBXGroup section */
+		06332FD2F9A5FAAE185A0E32 /* PR */ = {
+			isa = PBXGroup;
+			children = (
+				08E6B8A5D3A84A9D853C12D3 /* PRReviewStore.swift */,
+				ECA4134BBC32007B017BB137 /* PRReviewView.swift */,
+			);
+			path = PR;
+			sourceTree = "<group>";
+		};
 		0E3D5A35A52AA242B2AA482B = {
 			isa = PBXGroup;
 			children = (
 				74567A0B801E12E77AA67788 /* Sources */,
 				D7F037D83FAE5247101189D3 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		1CA59B8E21428EE482BCA34F /* DesignSystem */ = {
+			isa = PBXGroup;
+			children = (
+				27400B8F785B4F005376C210 /* LoupeColor.swift */,
+				F225D8B8621DD3673E2D8920 /* LoupeFont.swift */,
+				7E663576961837B5D16E0834 /* LoupeGlass.swift */,
+				1E2FFAAB6ACC439339FEF02A /* LoupeLayout.swift */,
+				2D8C55F2497879F0162316D5 /* LoupePrimitives.swift */,
+				B8856A7B3F5ECE4A366D257C /* LoupePriority.swift */,
+				B41B85BACAEFF94E8457438F /* SetiIcon.swift */,
+				0C406DF69090A1785B66D09F /* SummaryTruncation.swift */,
+			);
+			path = DesignSystem;
+			sourceTree = "<group>";
+		};
+		33FC3DED551B19411BA24F7B /* Pairing */ = {
+			isa = PBXGroup;
+			children = (
+				C1B26A1440D01EAE71FF81A7 /* PairingView.swift */,
+				AB66219C10D7BD35D8AAFD6A /* QRScannerView.swift */,
+			);
+			path = Pairing;
+			sourceTree = "<group>";
+		};
+		4571EAEC15BBB4EFD33E3F95 /* Session */ = {
+			isa = PBXGroup;
+			children = (
+				3B14AC3824481DBA69409424 /* SessionStore.swift */,
+				D80FE5A376838AD37C6483A1 /* SessionView.swift */,
+			);
+			path = Session;
+			sourceTree = "<group>";
+		};
+		5A350E065302DB24F000A139 /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				78B84E50F57E87414A8100B6 /* APIEnvelope.swift */,
+				770EED573AF2AADB041B0B08 /* ConnectGitHubView.swift */,
+				420363FB7913DCEA3F7C8AF8 /* DaemonModels.swift */,
+				C2C4AB5AB0E8579E60501F50 /* GitHubModels.swift */,
+				09A9E0F843AD9CAFA2E72F93 /* InboxStore.swift */,
+				84B54DE2626630BB38D3FF21 /* Keychain.swift */,
+				FB753F4CF4535E16F396F6DE /* LoupeClient.swift */,
+				8234C1130251F2CF03CC14B2 /* Pairing.swift */,
+				C7F3B71576C727C3C0EBACC1 /* PRModels.swift */,
+				7CF24D3C39FD34F27A15871B /* SessionModels.swift */,
+				5BD659A5AAE29E336B0822DF /* TicketMapping.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		74567A0B801E12E77AA67788 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				85A1752F2D8A0C9088C54C1C /* HomeView.swift */,
+				F7CDF81FFA139932EA4254EA /* LoupeSwiftUIApp.swift */,
+				967AC80B0A24BD1845B84D07 /* RootView.swift */,
+				9A80F58AEBB9DC8641EA773F /* Components */,
+				1CA59B8E21428EE482BCA34F /* DesignSystem */,
+				EE8B29426FF0EC211D8EA979 /* Models */,
+				5A350E065302DB24F000A139 /* Networking */,
+				33FC3DED551B19411BA24F7B /* Pairing */,
+				06332FD2F9A5FAAE185A0E32 /* PR */,
+				A8CB7BC5D991415E613BF0DC /* Resources */,
+				4571EAEC15BBB4EFD33E3F95 /* Session */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		9A80F58AEBB9DC8641EA773F /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				0DC703BB8FCF260EDB4DAA6E /* ExpandableSummaryText.swift */,
+				176DB1BB6131FEF54534B46A /* InboxComponents.swift */,
+				CF321EBD0E8C2A263AC93236 /* TicketCard.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+		A8CB7BC5D991415E613BF0DC /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				21E89A612A8173BEE324422D /* Assets.xcassets */,
+				9D0F5EF5B621E8259BD4E0B3 /* seti-associations.json */,
+				AC5241F22F8986F5895BE6F1 /* Fonts */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		AC5241F22F8986F5895BE6F1 /* Fonts */ = {
+			isa = PBXGroup;
+			children = (
+				198E86D28AADB7C806535F35 /* FamiljenGrotesk-Bold.ttf */,
+				BE8AD7E06ED431D21895D57B /* FamiljenGrotesk-Medium.ttf */,
+				709D711FC37A2D4D4ED3C06E /* FamiljenGrotesk-Regular.ttf */,
+				5EEA8BA42C6625FBCF3A60C1 /* FamiljenGrotesk-SemiBold.ttf */,
+				FCA6C527C88E5FE4A4266109 /* SpaceMono-Bold.ttf */,
+				D1ED1C3EB71696004AAC8302 /* SpaceMono-Regular.ttf */,
+			);
+			path = Fonts;
 			sourceTree = "<group>";
 		};
 		D7F037D83FAE5247101189D3 /* Products */ = {
@@ -31,6 +223,15 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		EE8B29426FF0EC211D8EA979 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				80E1E860055A3678C941B3D9 /* Inbox.swift */,
+				5C2F46CFA2F26E57A849FFF8 /* SampleInbox.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -39,14 +240,11 @@
 			buildConfigurationList = D40FCA78178C7EA31775718F /* Build configuration list for PBXNativeTarget "LoupeSwiftUI" */;
 			buildPhases = (
 				A2CA0EF27FAC9A4ADF55FFDB /* Sources */,
-				B1A2C3D4E5F60718293A4B5C /* Resources */,
+				5DAF15B70B38D7E884EE5BD8 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-			);
-			fileSystemSynchronizedGroups = (
-				74567A0B801E12E77AA67788 /* Sources */,
 			);
 			name = LoupeSwiftUI;
 			packageProductDependencies = (
@@ -62,7 +260,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2620;
+				LastUpgradeCheck = 1430;
 			};
 			buildConfigurationList = 1330368AA93A422D3B0A4976 /* Build configuration list for PBXProject "LoupeSwiftUI" */;
 			compatibilityVersion = "Xcode 14.0";
@@ -83,10 +281,18 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		B1A2C3D4E5F60718293A4B5C /* Resources */ = {
+		5DAF15B70B38D7E884EE5BD8 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8EA37D7B15AFC01F2A29F5F6 /* Assets.xcassets in Resources */,
+				4637D1FD967108CF5306D380 /* FamiljenGrotesk-Bold.ttf in Resources */,
+				962F855AC2744192E94D43D8 /* FamiljenGrotesk-Medium.ttf in Resources */,
+				4B0DB0605CABFDD429C78212 /* FamiljenGrotesk-Regular.ttf in Resources */,
+				A9D988AFB47FA7D32E524EA0 /* FamiljenGrotesk-SemiBold.ttf in Resources */,
+				B8DBAC0A733DC329E38AF098 /* SpaceMono-Bold.ttf in Resources */,
+				84BD2BC23F8ED2C7CD0FA21F /* SpaceMono-Regular.ttf in Resources */,
+				742D856DD6226A595FFA90E6 /* seti-associations.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -97,6 +303,39 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E1F2148C3E4B412841F187E0 /* APIEnvelope.swift in Sources */,
+				2ACF295C7BE51A9B9E2A7EE9 /* ConnectGitHubView.swift in Sources */,
+				07F1F5D75E2761DFC779ECB3 /* DaemonModels.swift in Sources */,
+				A25BA02F5B7F8A3E71A7DC37 /* ExpandableSummaryText.swift in Sources */,
+				61D7035041ADD00CA2204C7E /* GitHubModels.swift in Sources */,
+				976F424C1051835DF1465C02 /* HomeView.swift in Sources */,
+				D5260A0BA354CBFDFB79BB8F /* Inbox.swift in Sources */,
+				3D5E63ED0E44BB112B9CDC51 /* InboxComponents.swift in Sources */,
+				2031612EE11CB3793DB39B6B /* InboxStore.swift in Sources */,
+				8FBE4589036A5E324015B91C /* Keychain.swift in Sources */,
+				F3855E521C00E08D7591E938 /* LoupeClient.swift in Sources */,
+				55BB46FE759D9AE181CA7E6E /* LoupeColor.swift in Sources */,
+				1E5BECC0BDB652CC6BD77096 /* LoupeFont.swift in Sources */,
+				F5053C3F3B00000F1625A16C /* LoupeGlass.swift in Sources */,
+				CA91D7BDED9D37B54416F352 /* LoupeLayout.swift in Sources */,
+				CF7127E7CEEC79330A28D177 /* LoupePrimitives.swift in Sources */,
+				9C24162114DB8C77D1B6BF29 /* LoupePriority.swift in Sources */,
+				91A9E952C9DE97D733432202 /* LoupeSwiftUIApp.swift in Sources */,
+				BB966507C88FC198D6105A98 /* PRModels.swift in Sources */,
+				34FDCC4BCA9FBA936B3FB19C /* PRReviewStore.swift in Sources */,
+				48E77D4F5B130E00E02034CF /* PRReviewView.swift in Sources */,
+				A874DF126FBD7EDAF6E5E0E2 /* Pairing.swift in Sources */,
+				3A74319985EA7383AB9A1987 /* PairingView.swift in Sources */,
+				8648C08766F39FCBF15EC7F1 /* QRScannerView.swift in Sources */,
+				74E2C1B73545041A4587EF55 /* RootView.swift in Sources */,
+				DB9ECB82F8F40AEB13C75210 /* SampleInbox.swift in Sources */,
+				B99C178F1359A3FA61C7DAB9 /* SessionModels.swift in Sources */,
+				0760C3D9D1C9A06C952E59F8 /* SessionStore.swift in Sources */,
+				F095B5B5A68613D025ADD390 /* SessionView.swift in Sources */,
+				2FE5F1E6C97F115DDC6EB399 /* SetiIcon.swift in Sources */,
+				6F0982CCD5FAB572B7697F73 /* SummaryTruncation.swift in Sources */,
+				A0460B62A16AAB1192AC240E /* TicketCard.swift in Sources */,
+				C7BBD50D5561AEF0B78A549D /* TicketMapping.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -167,10 +406,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_TEAM = 257YPF88XJ;
-				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Loupe;
-				INFOPLIST_KEY_NSCameraUsageDescription = "Loupe scans the pairing QR code printed by your Mac.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -191,10 +427,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_TEAM = 257YPF88XJ;
-				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Loupe;
-				INFOPLIST_KEY_NSCameraUsageDescription = "Loupe scans the pairing QR code printed by your Mac.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

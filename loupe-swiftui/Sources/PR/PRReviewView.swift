@@ -86,7 +86,7 @@ struct PRReviewView: View {
     private func actionBar(_ pr: PRDetail) -> some View {
         HStack(spacing: 10) {
             Button { showReject = true } label: {
-                Text("Send back").font(LoupeFont.button).foregroundStyle(Color.textPrimary)
+                Text("Reject").font(LoupeFont.button).foregroundStyle(Color.textPrimary)
                     .frame(maxWidth: .infinity).padding(.vertical, 14)
                     .background(RoundedRectangle(cornerRadius: LoupeRadius.control).fill(Color.chipFill))
             }.buttonStyle(.plain)
@@ -102,7 +102,7 @@ struct PRReviewView: View {
 
     private var rejectSheet: some View {
         VStack(alignment: .leading, spacing: LoupeSpace.lg) {
-            Text("Send back to agent").font(LoupeFont.title).foregroundStyle(Color.textPrimary)
+            Text("Reject pull request").font(LoupeFont.title).foregroundStyle(Color.textPrimary)
             TextField("What needs to change?", text: $rejectReason, axis: .vertical)
                 .font(LoupeFont.body).lineLimit(3...6).padding(12)
                 .background(RoundedRectangle(cornerRadius: LoupeRadius.chip).fill(Color.surface))
@@ -111,7 +111,7 @@ struct PRReviewView: View {
                 showReject = false
                 Task { await store.reject(reason: rejectReason) }
             } label: {
-                Text("Send back").font(LoupeFont.button).foregroundStyle(.white)
+                Text("Reject").font(LoupeFont.button).foregroundStyle(.white)
                     .frame(maxWidth: .infinity).padding(.vertical, 14)
                     .background(RoundedRectangle(cornerRadius: LoupeRadius.control).fill(Color.accent))
             }

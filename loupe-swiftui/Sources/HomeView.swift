@@ -4,7 +4,9 @@ import SwiftUI
 // Rebuilt on the Loupe design system to match Figma node 210:18465.
 struct HomeView: View {
     @State var store: InboxStore
-    @State private var dispatchItem: InboxItem?
+    @State private var dispatchLaunch: DispatchLaunch?
+    @State private var pendingDispatch: PendingDispatch?
+    @State private var pendingDispatchTask: Task<Void, Never>?
     @State private var notPairedAlert = false
     @State private var showWorkstationPicker = false
     @State private var showAgentsSheet = false
@@ -24,8 +26,28 @@ struct HomeView: View {
                             .padding(.horizontal, LoupeSpace.screenInset)
                     }
 
+                    if case .loading = store.phase, items.isEmpty {
+                        statePanel(
+                            title: "Loading inbox",
+                            message: "Fetching assigned GitHub issues from your Mac.",
+                            systemImage: "arrow.clockwise"
+                        )
+                        .padding(.horizontal, LoupeSpace.screenInset)
+                    } else if case .loaded = store.phase, items.isEmpty {
+                        statePanel(
+                            title: "Inbox is clear",
+                            message: "Assigned GitHub issues will appear here when they are ready to dispatch.",
+                            systemImage: "checkmark.circle.fill"
+                        )
+                        .padding(.horizontal, LoupeSpace.screenInset)
+                    }
+
                     ForEach(items) { item in
-                        TicketCard(item: item, onDispatch: { dispatch(item) })
+                        TicketCard(
+                            item: item,
+                            onDispatch: { dispatch(item, harness: $0) },
+                            onRefreshBlueprint: { store.refreshBlueprint(item) }
+                        )
                     }
                 }
                 .padding(.bottom, LoupeSpace.xxl)
@@ -36,9 +58,25 @@ struct HomeView: View {
         .task {
             if store.isPaired { await store.refresh() }
         }
-        .fullScreenCover(item: $dispatchItem) { item in
+        .safeAreaInset(edge: .bottom) {
+            if let pendingDispatch {
+                PendingDispatchBanner(
+                    pending: pendingDispatch,
+                    onCancel: cancelPendingDispatch,
+                    onDispatchNow: { commitPendingDispatch(pendingDispatch.id) }
+                )
+                .padding(.horizontal, LoupeSpace.screenInset)
+                .padding(.bottom, 8)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.snappy, value: pendingDispatch?.id)
+        .fullScreenCover(item: $dispatchLaunch) { launch in
             if let pairing = store.pairing {
-                SessionView(store: SessionStore(item: item, pairing: pairing), pairing: pairing)
+                SessionView(
+                    store: SessionStore(item: launch.item, pairing: pairing, harness: launch.harness),
+                    pairing: pairing
+                )
             }
         }
         .alert("Pair your Mac first", isPresented: $notPairedAlert) {
@@ -52,15 +90,38 @@ struct HomeView: View {
         .sheet(isPresented: $showAgentsSheet) {
             agentsSheet
         }
+        .onDisappear { pendingDispatchTask?.cancel() }
     }
 
-    private func dispatch(_ item: InboxItem) {
+    private func dispatch(_ item: InboxItem, harness: Agent) {
         guard item.isReady else { return }
         if store.isPaired {
-            dispatchItem = item
+            let pending = PendingDispatch(item: item, harness: harness, duration: 4)
+            pendingDispatchTask?.cancel()
+            pendingDispatch = pending
+            pendingDispatchTask = Task {
+                try? await Task.sleep(for: .seconds(pending.duration))
+                await MainActor.run {
+                    commitPendingDispatch(pending.id)
+                }
+            }
         } else {
             notPairedAlert = true
         }
+    }
+
+    private func cancelPendingDispatch() {
+        pendingDispatchTask?.cancel()
+        pendingDispatchTask = nil
+        pendingDispatch = nil
+    }
+
+    private func commitPendingDispatch(_ id: PendingDispatch.ID) {
+        guard let pendingDispatch, pendingDispatch.id == id else { return }
+        pendingDispatchTask?.cancel()
+        pendingDispatchTask = nil
+        self.pendingDispatch = nil
+        dispatchLaunch = DispatchLaunch(item: pendingDispatch.item, harness: pendingDispatch.harness)
     }
 
     private func connectionBanner(_ message: String) -> some View {
@@ -87,6 +148,28 @@ struct HomeView: View {
                     .background(Capsule().fill(Color.accent))
                 Spacer()
             }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: LoupeRadius.control).fill(Color.surface))
+        .overlay(RoundedRectangle(cornerRadius: LoupeRadius.control).stroke(Color.hairline, lineWidth: 1))
+    }
+
+    private func statePanel(title: String, message: String, systemImage: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(Color.accent)
+                .frame(width: 24, height: 24)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(LoupeFont.bodyMedium)
+                    .foregroundStyle(Color.textPrimary)
+                Text(message)
+                    .font(LoupeFont.caption)
+                    .foregroundStyle(Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: LoupeRadius.control).fill(Color.surface))
@@ -234,6 +317,75 @@ struct HomeView: View {
             }
         }
         .presentationDetents([.medium])
+    }
+}
+
+private struct DispatchLaunch: Identifiable {
+    let id = UUID()
+    let item: InboxItem
+    let harness: Agent
+}
+
+private struct PendingDispatch: Identifiable {
+    let id = UUID()
+    let item: InboxItem
+    let harness: Agent
+    let duration: Int
+    let startedAt = Date()
+}
+
+private struct PendingDispatchBanner: View {
+    let pending: PendingDispatch
+    var onCancel: () -> Void
+    var onDispatchNow: () -> Void
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let elapsed = max(0, context.date.timeIntervalSince(pending.startedAt))
+            let progress = min(1, elapsed / Double(pending.duration))
+            let remaining = max(0, Int(ceil(Double(pending.duration) - elapsed)))
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    AgentGlyph(agent: pending.harness, size: 26)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Dispatching \(pending.item.reference)")
+                            .font(LoupeFont.bodyMedium)
+                            .foregroundStyle(Color.textPrimary)
+                        Text("\(pending.harness.label) starts in \(remaining)s")
+                            .font(LoupeFont.caption)
+                            .foregroundStyle(Color.textSecondary)
+                    }
+                    Spacer(minLength: 8)
+                    Button("Now") { onDispatchNow() }
+                        .font(LoupeFont.caption)
+                        .foregroundStyle(Color.accent)
+                    Button(action: onCancel) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color.textSecondary)
+                            .frame(width: 30, height: 30)
+                            .background(Circle().fill(Color.chipFill))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Cancel dispatch")
+                }
+
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.hairline)
+                        Capsule()
+                            .fill(Color.accent)
+                            .frame(width: proxy.size.width * progress)
+                    }
+                }
+                .frame(height: 4)
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: LoupeRadius.control).fill(Color.surface))
+            .overlay(RoundedRectangle(cornerRadius: LoupeRadius.control).stroke(Color.hairline, lineWidth: 1))
+            .shadow(color: .black.opacity(0.08), radius: 16, x: 0, y: 8)
+        }
     }
 }
 

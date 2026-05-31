@@ -20,11 +20,15 @@ final class InboxStore {
     private(set) var workstation: String = "Anands-Mac-mini.local"
     private(set) var onlineAgents: [Agent] = [.codex, .claude]
     private(set) var pairing: Pairing?
+    private(set) var githubConnected = true   // flips false on GITHUB_AUTH_REQUIRED
     @ObservationIgnored private var blueprintPollTask: Task<Void, Never>?
 
     init() {
         pairing = PairingStore.load()
         phase = pairing == nil ? .unpaired : .idle
+        if pairing != nil {
+            items = []
+        }
     }
 
     var isPaired: Bool { pairing != nil }
@@ -59,11 +63,27 @@ final class InboxStore {
             }
             let payload = try await client.inbox()
             items = payload.assigned.map { $0.toInboxItem() }
+            githubConnected = true
             phase = .loaded
             scheduleBlueprintPollIfNeeded()
+        } catch LoupeError.api(let e) where e.code == "GITHUB_AUTH_REQUIRED" {
+            githubConnected = false
+            items = []
+            phase = .idle   // RootView will route to ConnectGitHubView
         } catch {
-            // Keep showing whatever we have; surface the reason.
             phase = .failed((error as? LocalizedError)?.errorDescription ?? "\(error)")
+        }
+    }
+
+    /// Force-regenerate a stale ticket's Blueprint, then reload.
+    func refreshBlueprint(_ item: InboxItem) {
+        guard let pairing else { return }
+        let parts = item.repoFullName.split(separator: "/", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return }
+        Task {
+            let client = LoupeClient(pairing: pairing)
+            try? await client.refreshBlueprint(owner: parts[0], repo: parts[1], number: item.number)
+            await refresh()
         }
     }
 

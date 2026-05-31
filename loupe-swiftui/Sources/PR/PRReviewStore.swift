@@ -50,10 +50,10 @@ final class PRReviewStore {
     }
 
     func reject(reason: String) async {
-        phase = .acting("Sending back…")
+        phase = .acting("Rejecting…")
         do {
             try await client.rejectPR(owner: ref.owner, repo: ref.repo, number: ref.number, reason: reason)
-            phase = .done("Sent back to the agent.")
+            phase = .done("Rejected.")
         } catch { fail(error) }
     }
 

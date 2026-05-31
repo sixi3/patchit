@@ -33,8 +33,8 @@ struct SessionView: View {
                         .foregroundStyle(Color.textPrimary)
                 }
                 Spacer()
-                AgentGlyph(agent: store.item.targetAgent, size: 24)
-                Text(store.item.targetAgent.label).font(LoupeFont.label).foregroundStyle(Color.textMuted)
+                AgentGlyph(agent: store.harness, size: 24)
+                Text(store.harness.label).font(LoupeFont.label).foregroundStyle(Color.textMuted)
             }
             Text(store.item.title)
                 .font(LoupeFont.headline).foregroundStyle(Color.textPrimary)

@@ -9,11 +9,16 @@ struct RootView: View {
     var body: some View {
         Group {
             if store.isPaired {
-                HomeView(store: store)
+                if store.githubConnected {
+                    HomeView(store: store)
+                } else {
+                    ConnectGitHubView(store: store)
+                }
             } else {
                 PairingView(store: store)
             }
         }
         .animation(.snappy, value: store.isPaired)
+        .animation(.snappy, value: store.githubConnected)
     }
 }

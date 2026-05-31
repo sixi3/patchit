@@ -101,9 +101,13 @@ struct Blueprint: Codable {
     let blueprintConfidence: Double?  // 0–1
     let costEstimate: BlueprintCostEstimate?
     let degraded: Bool                // real planner failed → heuristic fallback
+    let stale: Bool                   // a tracked file changed since generation
+    let staleFiles: [String]
+    let staleReason: String?
 
     enum CodingKeys: String, CodingKey {
         case outcome, status, summary, size, files, degraded
+        case stale, staleFiles, staleReason
         case riskAreas = "risk_areas"
         case openQuestions = "open_questions"
         case missingInfo = "missing_info"
@@ -129,7 +133,10 @@ struct Blueprint: Codable {
         defaultAgent: Agent? = nil,
         blueprintConfidence: Double? = nil,
         costEstimate: BlueprintCostEstimate? = nil,
-        degraded: Bool = false
+        degraded: Bool = false,
+        stale: Bool = false,
+        staleFiles: [String] = [],
+        staleReason: String? = nil
     ) {
         self.outcome = outcome
         self.status = status
@@ -143,6 +150,9 @@ struct Blueprint: Codable {
         self.blueprintConfidence = blueprintConfidence
         self.costEstimate = costEstimate
         self.degraded = degraded
+        self.stale = stale
+        self.staleFiles = staleFiles
+        self.staleReason = staleReason
     }
 
     init(from decoder: Decoder) throws {
@@ -169,6 +179,9 @@ struct Blueprint: Codable {
         costEstimate = try c.decodeIfPresent(BlueprintCostEstimate.self, forKey: .costEstimate)
             ?? camel.decodeIfPresent(BlueprintCostEstimate.self, forKey: .costEstimate)
         degraded = try c.decodeIfPresent(Bool.self, forKey: .degraded) ?? false
+        stale = try c.decodeIfPresent(Bool.self, forKey: .stale) ?? false
+        staleFiles = try c.decodeIfPresent([String].self, forKey: .staleFiles) ?? []
+        staleReason = try c.decodeIfPresent(String.self, forKey: .staleReason)
     }
 }
 
@@ -204,6 +217,14 @@ struct InboxItem: Identifiable {
     /// Agent the dispatch button targets.
     var targetAgent: Agent { blueprint.defaultAgent ?? .codex }
 
+    /// The other harness (offered in the kebab "Dispatch with…" menu).
+    var alternateAgent: Agent { targetAgent == .codex ? .claude : .codex }
+
+    /// True when a file this Blueprint references changed since it was generated.
+    var isStale: Bool { blueprint.stale && !isAnalyzing }
+    var staleCount: Int { blueprint.staleFiles.count }
+    var staleReason: String? { blueprint.staleReason }
+
     /// Compact estimate for the repo strip, e.g. `~$0.42-$1.20`.
     var costStripLabel: String? {
         if let total = blueprint.costEstimate?.total,
@@ -224,11 +245,11 @@ struct InboxItem: Identifiable {
     var repoFullName: String { String(repo.drop(while: { $0 == "/" })) }
 
     /// Payload for POST /api/sessions/start. Branch mode for GitHub issues.
-    func dispatchRequest(workspaceId: String?) -> DispatchRequest {
+    func dispatchRequest(workspaceId: String?, harness: Agent? = nil) -> DispatchRequest {
         DispatchRequest(
             message: dispatchBrief,
             workspaceId: workspaceId,
-            harness: targetAgent.harnessId,
+            harness: (harness ?? targetAgent).harnessId,
             dispatch: .init(
                 ticket: .init(repo: repoFullName, number: number, title: title,
                               url: issueURL, kind: source == .github ? "issue" : "issue"),
