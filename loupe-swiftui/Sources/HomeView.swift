@@ -4,14 +4,18 @@ import SwiftUI
 // Rebuilt on the Loupe design system to match Figma node 210:18465.
 struct HomeView: View {
     @State var store: InboxStore
+    let sessions: SessionsStore
     @State private var dispatchLaunch: DispatchLaunch?
     @State private var pendingDispatch: PendingDispatch?
     @State private var pendingDispatchTask: Task<Void, Never>?
     @State private var notPairedAlert = false
     @State private var showWorkstationPicker = false
-    @State private var showAgentsSheet = false
+    @State private var showSessions = false
 
-    private var items: [InboxItem] { store.items }
+    /// Hide tickets whose dispatch is in flight or done (failed ones return).
+    private var items: [InboxItem] {
+        store.items.filter { !sessions.hiddenIssueIDs.contains($0.id) }
+    }
     private var workstation: String { store.workstation }
     private var onlineAgents: [Agent] { store.onlineAgents }
 
@@ -48,6 +52,7 @@ struct HomeView: View {
                             onDispatch: { dispatch(item, harness: $0) },
                             onRefreshBlueprint: { store.refreshBlueprint(item) }
                         )
+                        .transition(.flyToPill)
                     }
                 }
                 .padding(.bottom, LoupeSpace.xxl)
@@ -78,10 +83,7 @@ struct HomeView: View {
         .animation(.snappy, value: pendingDispatch?.id)
         .fullScreenCover(item: $dispatchLaunch) { launch in
             if let pairing = store.pairing {
-                SessionView(
-                    store: SessionStore(item: launch.item, pairing: pairing, harness: launch.harness),
-                    pairing: pairing
-                )
+                SessionView(store: launch.session, pairing: pairing)
             }
         }
         .alert("Pair your Mac first", isPresented: $notPairedAlert) {
@@ -92,8 +94,10 @@ struct HomeView: View {
         .sheet(isPresented: $showWorkstationPicker) {
             workstationSheet
         }
-        .sheet(isPresented: $showAgentsSheet) {
-            agentsSheet
+        .sheet(isPresented: $showSessions) {
+            if let pairing = store.pairing {
+                SessionsListView(sessions: sessions, pairing: pairing)
+            }
         }
         .onDisappear { pendingDispatchTask?.cancel() }
     }
@@ -122,11 +126,25 @@ struct HomeView: View {
     }
 
     private func commitPendingDispatch(_ id: PendingDispatch.ID) {
-        guard let pendingDispatch, pendingDispatch.id == id else { return }
+        guard let pendingDispatch, pendingDispatch.id == id, let pairing = store.pairing else { return }
         pendingDispatchTask?.cancel()
         pendingDispatchTask = nil
+        let item = pendingDispatch.item
+        let harness = pendingDispatch.harness
         self.pendingDispatch = nil
-        dispatchLaunch = DispatchLaunch(item: pendingDispatch.item, harness: pendingDispatch.harness)
+
+        // Register + start the session, and let the card fly toward the pill
+        // (it leaves the inbox because its id enters hiddenIssueIDs).
+        let session = withAnimation(.spring(response: 0.5, dampingFraction: 0.82)) {
+            sessions.dispatch(item: item, harness: harness, pairing: pairing)
+        }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+
+        // After the fly-to-pill animation, open the live session full-screen.
+        Task {
+            try? await Task.sleep(for: .milliseconds(480))
+            await MainActor.run { dispatchLaunch = DispatchLaunch(session: session) }
+        }
     }
 
     private func connectionBanner(_ message: String) -> some View {
@@ -237,7 +255,8 @@ struct HomeView: View {
     }
 
     private var agentPillButton: some View {
-        Button { showAgentsSheet = true } label: {
+        let running = sessions.runningCount
+        return Button { showSessions = true } label: {
             HStack(spacing: 6) {
                 ZStack {
                     ForEach(Array(onlineAgents.enumerated()), id: \.offset) { idx, agent in
@@ -248,17 +267,24 @@ struct HomeView: View {
                 }
                 .frame(width: LoupeSize.agentBadge + CGFloat(max(0, onlineAgents.count - 1)) * 14, alignment: .leading)
 
-                Text("\(onlineAgents.count)")
+                Text("\(running)")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.textPrimary)
+                    .foregroundStyle(running > 0 ? Color.accent : Color.textPrimary)
+                    .contentTransition(.numericText())
             }
             .padding(.horizontal, 12)
             .frame(height: LoupeSize.avatar)
             .contentShape(Capsule())
             .loupeGlassCapsule(interactive: true)
+            .overlay {
+                if running > 0 {
+                    Capsule().stroke(Color.accent, lineWidth: 2).modifier(PillPulseModifier())
+                }
+            }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(onlineAgents.count) online agents")
+        .animation(.snappy, value: running)
+        .accessibilityLabel(running > 0 ? "\(running) running session\(running == 1 ? "" : "s"), tap to view" : "Sessions")
     }
 
     // MARK: Inbox title
@@ -276,7 +302,7 @@ struct HomeView: View {
                 }
             Spacer(minLength: 0)
             if let lastSynced = store.lastSynced {
-                (Text("Updated ") + Text(lastSynced, style: .relative))
+                Text(syncLabel(for: lastSynced))
                     .font(LoupeFont.caption)
                     .foregroundStyle(Color.textSecondary)
                     .alignmentGuide(.inboxBadge) { dimensions in
@@ -285,6 +311,14 @@ struct HomeView: View {
             }
         }
         .padding(.vertical, 18)
+    }
+
+    private func syncLabel(for date: Date) -> String {
+        let secs = Int(Date().timeIntervalSince(date))
+        if secs < 60 { return "Updated just now" }
+        if secs < 3600 { return "Updated \(secs / 60)m ago" }
+        if secs < 86400 { return "Updated \(secs / 3600)h ago" }
+        return "Updated \(secs / 86400)d ago"
     }
 
     // MARK: Sheets
@@ -310,33 +344,35 @@ struct HomeView: View {
         .presentationDetents([.medium])
     }
 
-    private var agentsSheet: some View {
-        NavigationStack {
-            List {
-                ForEach(onlineAgents, id: \.self) { agent in
-                    HStack(spacing: 12) {
-                        AgentGlyph(agent: agent, size: 28)
-                        Text(agent.label)
-                            .font(LoupeFont.headline)
-                    }
-                }
-            }
-            .navigationTitle("Online agents")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { showAgentsSheet = false }
-                }
-            }
-        }
-        .presentationDetents([.medium])
-    }
 }
 
 private struct DispatchLaunch: Identifiable {
     let id = UUID()
-    let item: InboxItem
-    let harness: Agent
+    let session: SessionStore
+}
+
+// Card leaves the inbox shrinking toward the top-trailing pill.
+extension AnyTransition {
+    static var flyToPill: AnyTransition {
+        .asymmetric(
+            insertion: .opacity,
+            removal: .scale(scale: 0.25, anchor: .topTrailing)
+                .combined(with: .offset(x: 60, y: -90))
+                .combined(with: .opacity)
+        )
+    }
+}
+
+// Pulsing ring around the pill while sessions run.
+private struct PillPulseModifier: ViewModifier {
+    @State private var on = false
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(on ? 1.12 : 1.0)
+            .opacity(on ? 0 : 0.75)
+            .animation(.easeOut(duration: 1.2).repeatForever(autoreverses: false), value: on)
+            .onAppear { on = true }
+    }
 }
 
 private struct PendingDispatch: Identifiable {
@@ -425,5 +461,5 @@ private extension VerticalAlignment {
 }
 
 #Preview {
-    HomeView(store: InboxStore())
+    HomeView(store: InboxStore(), sessions: SessionsStore())
 }
