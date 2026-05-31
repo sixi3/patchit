@@ -21,5 +21,10 @@ struct RootView: View {
         }
         .animation(.snappy, value: store.isPaired)
         .animation(.snappy, value: store.githubConnected)
+        .task(id: store.pairing?.host) {
+            if let pairing = store.pairing {
+                await sessions.hydrate(pairing: pairing)
+            }
+        }
     }
 }

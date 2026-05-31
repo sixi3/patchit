@@ -44,6 +44,11 @@ actor LoupeClient {
         return resp
     }
 
+    func sessions() async throws -> [SessionSnapshot] {
+        let response = try await request(path: "/api/sessions", method: "GET", as: SessionsResponse.self)
+        return response.ok ? response.sessions : []
+    }
+
     // MARK: PR review
     func prDetail(owner: String, repo: String, number: Int) async throws -> PRDetail {
         try await getEnvelope(path: "/api/v1/prs/\(owner)/\(repo)/\(number)", as: PRDetail.self)
@@ -186,6 +191,11 @@ actor LoupeClient {
     }
 
     private struct EmptyData: Decodable {}
+
+    private struct SessionsResponse: Decodable {
+        let ok: Bool
+        let sessions: [SessionSnapshot]
+    }
 
     private struct BareErrorResponse: Decodable {
         let error: String?

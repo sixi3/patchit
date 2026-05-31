@@ -5,6 +5,10 @@ import Foundation
 extension Agent {
     /// Daemon harness id. Claude maps to "claude-code".
     var harnessId: String { self == .claude ? "claude-code" : "codex" }
+
+    init(harnessId: String?) {
+        self = harnessId == "claude-code" || harnessId == "claude" ? .claude : .codex
+    }
 }
 
 /// POST /api/sessions/start request body.
@@ -40,6 +44,33 @@ struct DispatchResponse: Decodable {
         let name: String
         let base: String
         let repo: String
+    }
+}
+
+/// GET /api/sessions response item from daemon serializeSession().
+struct SessionSnapshot: Decodable, Identifiable {
+    let id: String
+    let harnessId: String?
+    let message: String?
+    let status: String?
+    let events: [SessionEvent]
+    let nextEventId: Int?
+    let startedAt: String?
+    let exitCode: Int?
+    let dispatch: SnapshotDispatch?
+    let branch: DispatchResponse.Branch?
+
+    struct SnapshotDispatch: Decodable {
+        let ticket: Ticket?
+        let mode: String?
+
+        struct Ticket: Decodable {
+            let repo: String?
+            let number: Int?
+            let title: String?
+            let url: String?
+            let kind: String?
+        }
     }
 }
 

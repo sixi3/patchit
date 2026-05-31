@@ -34,7 +34,7 @@ final class PRReviewStore {
     }
 
     func merge() async {
-        phase = .acting("Merging…")
+        phase = .acting(pr?.draft == true ? "Marking ready and merging…" : "Merging…")
         do {
             let result = try await client.mergePR(owner: ref.owner, repo: ref.repo, number: ref.number)
             phase = .done(result.merged == true ? "Merged ✓" : (result.message ?? "Merge requested."))

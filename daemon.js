@@ -428,6 +428,10 @@ function githubApiRequest(method, pathname, token, payload = null) {
   });
 }
 
+function githubGraphqlRequest(token, query, variables = {}) {
+  return githubApiRequest("POST", "/graphql", token, { query, variables });
+}
+
 function githubOAuthPost(pathname, params) {
   const body = new URLSearchParams(params).toString();
   return new Promise((resolve, reject) => {
@@ -789,11 +793,38 @@ async function mergePullRequest(owner, repo, number, { commitTitle, commitMessag
     throw error;
   }
   const safe = parseRepoPair(owner, repo);
-  return githubApiRequest("PUT", `/repos/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.repo)}/pulls/${Number(number)}/merge`, token, {
+  const repoPath = `/repos/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.repo)}`;
+  const prNumber = Number(number);
+  const pr = await githubApiRequest("GET", `${repoPath}/pulls/${prNumber}`, token);
+  if (pr.draft) {
+    await markPullRequestReadyForReview(token, pr.node_id);
+  }
+  return githubApiRequest("PUT", `${repoPath}/pulls/${prNumber}/merge`, token, {
     merge_method: "squash",
     ...(commitTitle ? { commit_title: commitTitle } : {}),
     ...(commitMessage ? { commit_message: commitMessage } : {})
   });
+}
+
+async function markPullRequestReadyForReview(token, pullRequestId) {
+  if (!pullRequestId) {
+    const error = new Error("GitHub did not return a pull request id.");
+    error.statusCode = 502;
+    throw error;
+  }
+  const result = await githubGraphqlRequest(token, `
+    mutation MarkPullRequestReadyForReview($id: ID!) {
+      markPullRequestReadyForReview(input: { pullRequestId: $id }) {
+        pullRequest { number isDraft url }
+      }
+    }
+  `, { id: pullRequestId });
+  if (Array.isArray(result.errors) && result.errors.length) {
+    const error = new Error(result.errors.map((item) => item.message).filter(Boolean).join("; ") || "GitHub could not mark the pull request ready for review.");
+    error.statusCode = 422;
+    throw error;
+  }
+  return result.data?.markPullRequestReadyForReview?.pullRequest || null;
 }
 
 async function closePullRequest(owner, repo, number) {
