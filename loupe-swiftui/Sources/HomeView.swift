@@ -5,7 +5,6 @@ import SwiftUI
 struct HomeView: View {
     @State var store: InboxStore
     let sessions: SessionsStore
-    @State private var dispatchLaunch: DispatchLaunch?
     @State private var pendingDispatch: PendingDispatch?
     @State private var pendingDispatchTask: Task<Void, Never>?
     @State private var notPairedAlert = false
@@ -81,11 +80,6 @@ struct HomeView: View {
             }
         }
         .animation(.snappy, value: pendingDispatch?.id)
-        .fullScreenCover(item: $dispatchLaunch) { launch in
-            if let pairing = store.pairing {
-                SessionView(store: launch.session, pairing: pairing)
-            }
-        }
         .alert("Pair your Mac first", isPresented: $notPairedAlert) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -135,16 +129,12 @@ struct HomeView: View {
 
         // Register + start the session, and let the card fly toward the pill
         // (it leaves the inbox because its id enters hiddenIssueIDs).
-        let session = withAnimation(.spring(response: 0.5, dampingFraction: 0.82)) {
+        // Register + start the session in the background; the card flies to the
+        // pill. We do NOT auto-open the session — the user taps the pill to view it.
+        _ = withAnimation(.spring(response: 0.5, dampingFraction: 0.82)) {
             sessions.dispatch(item: item, harness: harness, pairing: pairing)
         }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-
-        // After the fly-to-pill animation, open the live session full-screen.
-        Task {
-            try? await Task.sleep(for: .milliseconds(480))
-            await MainActor.run { dispatchLaunch = DispatchLaunch(session: session) }
-        }
     }
 
     private func connectionBanner(_ message: String) -> some View {
@@ -267,10 +257,13 @@ struct HomeView: View {
                 }
                 .frame(width: LoupeSize.agentBadge + CGFloat(max(0, onlineAgents.count - 1)) * 14, alignment: .leading)
 
-                Text("\(running)")
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundStyle(running > 0 ? Color.accent : Color.textPrimary)
-                    .contentTransition(.numericText())
+                if running > 0 {
+                    Text("\(running)")
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.accent)
+                        .contentTransition(.numericText())
+                        .transition(.scale.combined(with: .opacity))
+                }
             }
             .padding(.horizontal, 12)
             .frame(height: LoupeSize.avatar)
@@ -278,7 +271,7 @@ struct HomeView: View {
             .loupeGlassCapsule(interactive: true)
             .overlay {
                 if running > 0 {
-                    Capsule().stroke(Color.accent, lineWidth: 2).modifier(PillPulseModifier())
+                    Capsule().stroke(Color.accent, lineWidth: 1.5)
                 }
             }
         }
@@ -346,11 +339,6 @@ struct HomeView: View {
 
 }
 
-private struct DispatchLaunch: Identifiable {
-    let id = UUID()
-    let session: SessionStore
-}
-
 // Card leaves the inbox shrinking toward the top-trailing pill.
 extension AnyTransition {
     static var flyToPill: AnyTransition {
@@ -363,17 +351,6 @@ extension AnyTransition {
     }
 }
 
-// Pulsing ring around the pill while sessions run.
-private struct PillPulseModifier: ViewModifier {
-    @State private var on = false
-    func body(content: Content) -> some View {
-        content
-            .scaleEffect(on ? 1.12 : 1.0)
-            .opacity(on ? 0 : 0.75)
-            .animation(.easeOut(duration: 1.2).repeatForever(autoreverses: false), value: on)
-            .onAppear { on = true }
-    }
-}
 
 private struct PendingDispatch: Identifiable {
     let id = UUID()
