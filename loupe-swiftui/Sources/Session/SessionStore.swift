@@ -16,7 +16,7 @@ final class SessionStore: Identifiable {
     let id = UUID()
     let item: InboxItem
     let harness: Agent
-    let startedAt = Date()
+    let startedAt: Date
     private let pairing: Pairing
     private let workspaceId: String?
 
@@ -40,8 +40,24 @@ final class SessionStore: Identifiable {
     init(item: InboxItem, pairing: Pairing, harness: Agent? = nil, workspaceId: String? = nil) {
         self.item = item
         self.harness = harness ?? item.targetAgent
+        self.startedAt = Date()
         self.pairing = pairing
         self.workspaceId = workspaceId
+    }
+
+    init(snapshot: SessionSnapshot, pairing: Pairing) {
+        self.item = InboxItem(snapshot: snapshot)
+        self.harness = Agent(harnessId: snapshot.harnessId)
+        self.startedAt = Self.date(from: snapshot.startedAt) ?? Date()
+        self.pairing = pairing
+        self.workspaceId = nil
+        self.events = snapshot.events
+        self.sessionId = snapshot.id
+        self.branch = snapshot.branch
+        self.prRef = Self.prRef(from: snapshot.events)
+        self.phase = Self.phase(from: snapshot)
+        self.hasStarted = true
+        self.lastError = snapshot.events.last(where: { $0.type == "error" })?.text
     }
 
     /// True once the agent pushed a branch we can open a PR from.
@@ -89,12 +105,18 @@ final class SessionStore: Identifiable {
         }
     }
 
-    private func listen(client: LoupeClient, sessionId: String) {
+    func reconnectIfRunning() {
+        guard isRunning, let sessionId else { return }
+        listen(client: LoupeClient(pairing: pairing), sessionId: sessionId, since: events.map(\.id).max().map { $0 + 1 } ?? 0)
+    }
+
+    private func listen(client: LoupeClient, sessionId: String, since: Int = 0) {
         streamTask?.cancel()
         streamTask = Task { [weak self] in
             do {
-                for try await event in client.events(sessionId: sessionId, since: 0) {
+                for try await event in client.events(sessionId: sessionId, since: since) {
                     guard let self else { return }
+                    if self.events.contains(where: { $0.id == event.id }) { continue }
                     self.events.append(event)
                     if event.type == "error", let text = event.text, !text.isEmpty {
                         self.lastError = text
@@ -123,5 +145,61 @@ final class SessionStore: Identifiable {
     func cancel() {
         streamTask?.cancel()
         streamTask = nil
+    }
+
+    private static func prRef(from events: [SessionEvent]) -> PRRef? {
+        guard let event = events.last(where: { $0.type == "branch" && $0.kind == "pr_ready" }),
+              let number = event.prNumber,
+              let repo = event.repo else { return nil }
+        let parts = repo.split(separator: "/", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return nil }
+        return PRRef(owner: parts[0], repo: parts[1], number: number)
+    }
+
+    private static func phase(from snapshot: SessionSnapshot) -> Phase {
+        if snapshot.status == "running" { return .streaming }
+        if let done = snapshot.events.last(where: { $0.type == "done" }) {
+            return done.status == "completed"
+                ? .completed(success: true)
+                : .failed(snapshot.events.last(where: { $0.type == "error" })?.text ?? "The agent run did not complete.")
+        }
+        if snapshot.status == "completed" { return .completed(success: snapshot.exitCode == 0 || snapshot.exitCode == nil) }
+        if snapshot.status == "failed" || snapshot.status == "interrupted" {
+            return .failed(snapshot.events.last(where: { $0.type == "error" })?.text ?? "The agent run did not complete.")
+        }
+        return .completed(success: false)
+    }
+
+    private static func date(from iso: String?) -> Date? {
+        guard let iso else { return nil }
+        return ISO8601DateFormatter().date(from: iso)
+    }
+}
+
+private extension InboxItem {
+    init(snapshot: SessionSnapshot) {
+        let ticket = snapshot.dispatch?.ticket
+        let repo = ticket?.repo ?? "unknown/repo"
+        let number = ticket?.number ?? 0
+        let title = ticket?.title ?? snapshot.message?.split(separator: "\n").first.map(String.init) ?? "Recovered session"
+        let summary = snapshot.message?.split(separator: "\n", omittingEmptySubsequences: false).dropFirst().joined(separator: "\n")
+        self.init(
+            id: repo == "unknown/repo" ? snapshot.id : "\(repo)#\(number)",
+            source: .github,
+            reference: number > 0 ? "GH-\(number)" : "Session",
+            repo: "/\(repo)",
+            title: title,
+            priority: .normal,
+            issueType: .task,
+            updatedAt: "",
+            blueprint: Blueprint(
+                outcome: .ready,
+                summary: summary?.isEmpty == false ? summary : "Recovered from the Mac daemon.",
+                defaultAgent: Agent(harnessId: snapshot.harnessId),
+                blueprintConfidence: nil
+            ),
+            number: number,
+            issueURL: ticket?.url ?? ""
+        )
     }
 }
