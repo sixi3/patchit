@@ -41,6 +41,7 @@ enum LoupeColor {
 
         // Brand
         static let indigo       = Color(hex: 0x3D4EF5)  // inbox badge, accents
+        static let indigoWash   = Color(hex: 0xEEF0FF)  // pale brand tint
         static let onlineGreen  = Color(hex: 0x35C75A)  // status dot
 
         // Priority families
@@ -82,6 +83,7 @@ extension Color {
     static let chipFill      = LoupeColor.Raw.chip
 
     static let accent        = LoupeColor.Raw.indigo
+    static let accentWash    = LoupeColor.Raw.indigoWash
     static let onlineDot     = LoupeColor.Raw.onlineGreen
     static let riskAlert     = LoupeColor.Raw.red
 

@@ -1,12 +1,5 @@
 import SwiftUI
 
-private struct SummaryWidthKey: PreferenceKey {
-    static var defaultValue: CGFloat { 0 }
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
 // MARK: - ExpandableSummaryText
 // Tap to expand blueprint summary; collapsed copy is a measured two-line prefix so
 // line breaks stay stable when expanding (no orphaned word jumping to line 3).
@@ -45,13 +38,9 @@ struct ExpandableSummaryText: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, LoupeSpace.xs)
         }
-        .background {
-            GeometryReader { proxy in
-                Color.clear.preference(key: SummaryWidthKey.self, value: proxy.size.width)
-            }
-            .frame(height: 0)
-        }
-        .onPreferenceChange(SummaryWidthKey.self) { containerWidth = $0 }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onGeometryChange(for: CGFloat.self, of: \.size.width) { containerWidth = $0 }
         .buttonStyle(.plain)
         .accessibilityLabel("Blueprint summary")
         .accessibilityHint(

@@ -24,28 +24,8 @@ struct HomeView: View {
         ZStack {
             Color.canvas.ignoresSafeArea()
 
-            ScrollView {
-                LazyVStack(spacing: LoupeSpace.cardGap) {
-                    if case .failed(let message) = store.phase {
-                        connectionBanner(message)
-                            .padding(.horizontal, LoupeSpace.screenInset)
-                    }
-
-                    switch homeTab {
-                    case .tickets: ticketsContent
-                    case .prs:     prsContent
-                    }
-                }
-                .animation(.snappy(duration: 0.28), value: homeTab)
-                .padding(.bottom, LoupeSpace.xxl)
-            }
-            .refreshable {
-                let haptic = UIImpactFeedbackGenerator(style: .light)
-                haptic.prepare()
-                haptic.impactOccurred()
-                await store.refresh()
-            }
-            .loupeStickyTopBar { stickyHeader }
+            homeTabPager
+                .loupeStickyTopBar { stickyHeader }
         }
         .task {
             if store.isPaired { await store.refresh() }
@@ -123,6 +103,51 @@ struct HomeView: View {
             sessions.dispatch(item: item, harness: harness, pairing: pairing)
         }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    }
+
+    private var homeTabScrollPosition: Binding<HomeTab?> {
+        Binding(
+            get: { homeTab },
+            set: { if let tab = $0 { homeTab = tab } }
+        )
+    }
+
+    private var homeTabPager: some View {
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 0) {
+                homeTabPage { ticketsContent }
+                    .containerRelativeFrame(.horizontal)
+                    .id(HomeTab.tickets)
+                homeTabPage { prsContent }
+                    .containerRelativeFrame(.horizontal)
+                    .id(HomeTab.prs)
+            }
+            .scrollTargetLayout()
+        }
+        .scrollIndicators(.hidden)
+        .scrollTargetBehavior(.paging)
+        .scrollPosition(id: homeTabScrollPosition)
+    }
+
+    @ViewBuilder
+    private func homeTabPage<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        ScrollView {
+            LazyVStack(spacing: LoupeSpace.cardGap) {
+                if case .failed(let message) = store.phase {
+                    connectionBanner(message)
+                        .padding(.horizontal, LoupeSpace.screenInset)
+                }
+                content()
+            }
+            .padding(.bottom, LoupeSpace.xxl)
+        }
+        .frame(maxHeight: .infinity)
+        .refreshable {
+            let haptic = UIImpactFeedbackGenerator(style: .light)
+            haptic.prepare()
+            haptic.impactOccurred()
+            await store.refresh()
+        }
     }
 
     @ViewBuilder
@@ -216,16 +241,14 @@ struct HomeView: View {
         .overlay(RoundedRectangle(cornerRadius: LoupeRadius.control).stroke(Color.hairline, lineWidth: 1))
     }
 
-    // MARK: Sticky header (user row + inbox title)
+    // MARK: Sticky header (user row + tabs)
     private var stickyHeader: some View {
         VStack(spacing: 0) {
             userInfoRow
                 .padding(.horizontal, LoupeSpace.screenInset)
-            inboxHeader
+            GlassTabSwitcher(selection: $homeTab)
                 .padding(.horizontal, LoupeSpace.screenInset)
-            GlassTabSwitcher(selection: $homeTab, ticketCount: items.count, prCount: store.prs.count)
-                .padding(.horizontal, LoupeSpace.screenInset)
-                .padding(.bottom, 10)
+                .padding(.vertical, LoupeSpace.xl)
         }
     }
 
@@ -308,32 +331,6 @@ struct HomeView: View {
         .buttonStyle(.plain)
         .animation(.snappy, value: running)
         .accessibilityLabel(running > 0 ? "\(running) running session\(running == 1 ? "" : "s"), tap to view" : "Sessions")
-    }
-
-    // MARK: Inbox title
-    private var inboxHeader: some View {
-        HStack(alignment: .inboxBadge, spacing: 10) {
-            Text("Inbox")
-                .font(LoupeFont.largeTitle)
-                .foregroundStyle(Color.textPrimary)
-                .alignmentGuide(.inboxBadge) { dimensions in
-                    dimensions[.firstTextBaseline] - 10
-                }
-            InboxCountBadge(count: items.count)
-                .alignmentGuide(.inboxBadge) { dimensions in
-                    dimensions[VerticalAlignment.center]
-                }
-            Spacer(minLength: 0)
-            if let lastSynced = store.lastSynced {
-                Text(syncLabel(for: lastSynced))
-                    .font(LoupeFont.caption)
-                    .foregroundStyle(Color.textSecondary)
-                    .alignmentGuide(.inboxBadge) { dimensions in
-                        dimensions[.firstTextBaseline] - 4
-                    }
-            }
-        }
-        .padding(.vertical, 18)
     }
 
     private func syncLabel(for date: Date) -> String {
@@ -454,17 +451,6 @@ private struct GlassHeaderContainerModifier: ViewModifier {
             content
         }
     }
-}
-
-// Aligns a small badge to the visual center of the 30pt Inbox title (custom fonts sit high in their line box).
-private extension VerticalAlignment {
-    enum InboxBadgeAlignment: AlignmentID {
-        static func defaultValue(in context: ViewDimensions) -> CGFloat {
-            context[VerticalAlignment.center]
-        }
-    }
-
-    static let inboxBadge = VerticalAlignment(InboxBadgeAlignment.self)
 }
 
 #Preview {
