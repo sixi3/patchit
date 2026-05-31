@@ -9,45 +9,49 @@ struct TicketCard: View {
     var onMore: () -> Void = {}
 
     var body: some View {
-        HStack(spacing: 0) {
-            // Priority rail
-            Rectangle()
-                .fill(item.priority.rail)
-                .frame(width: LoupeSize.rail)
-
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                body_
-            }
-            .background(Color.surface)
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            body_
         }
-        .background(item.priority.wash)   // faint full-card wash
-        .clipShape(RoundedRectangle(cornerRadius: LoupeRadius.card))
+        .background(Color.surface)
     }
 
-    // Hatched, priority-tinted top zone
+    // Hatched, priority-tinted top zone — rail is header-height only.
     private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                PriorityGlyphs(type: item.issueType, priority: item.priority)
-                Text(item.reference)
-                    .font(LoupeFont.code)
-                    .foregroundStyle(Color.textSecondary)
-                Spacer()
-                Text(item.updatedAt)
-                    .font(LoupeFont.code)
-                    .foregroundStyle(Color.textMuted)
-            }
+        HStack(spacing: 0) {
+            item.priority.rail
+                .frame(width: LoupeSize.rail)
+                .clipShape(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 0,
+                        bottomLeadingRadius: 0,
+                        bottomTrailingRadius: LoupeRadius.railCorner,
+                        topTrailingRadius: LoupeRadius.railCorner
+                    )
+                )
 
-            Text(item.title)
-                .font(LoupeFont.title)
-                .foregroundStyle(Color.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-                .multilineTextAlignment(.leading)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    PriorityGlyphs(type: item.issueType, priority: item.priority)
+                    Text(item.reference)
+                        .font(LoupeFont.code)
+                        .foregroundStyle(Color.textSecondary)
+                    Spacer()
+                    Text(item.updatedAt)
+                        .font(LoupeFont.code)
+                        .foregroundStyle(Color.textMuted)
+                }
+
+                Text(item.title)
+                    .font(LoupeFont.title)
+                    .foregroundStyle(Color.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(.horizontal, LoupeSpace.lg)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, LoupeSpace.lg)
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .background(PriorityHeaderBackground(priority: item.priority))
     }
 

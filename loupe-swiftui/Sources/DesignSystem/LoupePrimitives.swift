@@ -16,12 +16,12 @@ struct HatchPattern: Shape {
     }
 }
 
-/// Header background: priority wash + hatch, clipped to its bounds.
+/// Header background: diagonal hatch stripes only (no priority wash).
 struct PriorityHeaderBackground: View {
     let priority: LoupePriority
     var body: some View {
         ZStack {
-            priority.wash
+            Color.surface
             HatchPattern()
                 .stroke(priority.hatch.opacity(0.14), lineWidth: 1.2)
         }

@@ -22,6 +22,7 @@ enum LoupeRadius {
     static let chip:    CGFloat = 6    // repo pill, file chip
     static let control: CGFloat = 10   // dispatch button, metric strip
     static let card:    CGFloat = 10
+    static let railCorner: CGFloat = 8 // priority rail trailing corners (4pt-wide bar)
     static let capsule: CGFloat = 999  // glass pills, count badge, status capsule
 }
 
@@ -31,7 +32,7 @@ enum LoupeSize {
     static let caret:         CGFloat = 20
     static let ring:          CGFloat = 46   // confidence ring
     static let agentBadge:    CGFloat = 22   // notification/agent glyph circle
-    static let rail:          CGFloat = 5    // priority left rail
+    static let rail:          CGFloat = 3    // priority left rail
     static let kebab:         CGFloat = 48
 }
 
