@@ -33,7 +33,7 @@ Triggers for needs_info:
 Do NOT return needs_info for tickets that are merely brief but actionable.
 "Add a refresh icon to the inbox button" is fine even without explicit AC.
 
-## Phase 2 — Codebase exploration (≤ 12 tool calls)
+## Phase 2 — Codebase exploration (≤ 8 tool calls)
 
 If the ticket is dispatchable:
 
@@ -43,6 +43,16 @@ If the ticket is dispatchable:
 2. Identify files most likely to be modified. Favor Grep on
    ticket-mentioned identifiers + Glob on directory structures. Use
    Read sparingly on the 1–3 most promising files only.
+
+   COST DISCIPLINE (important):
+   - Prefer Grep/Glob over Read. Grep returns only matching lines; a full
+     Read of a large file re-enters context on every subsequent turn and is
+     the dominant cost driver.
+   - Never Read in full a file that is large (>500 lines), generated,
+     minified, vendored, or a lock file (e.g. *.min.*, dist/, build/,
+     node_modules/, package-lock.json, prototype*.html). Grep it instead.
+   - When you do Read, you usually only need the relevant section, not the
+     whole file. Stop exploring as soon as you can predict the change.
 3. Check the package manifest (package.json, pyproject.toml,
    Cargo.toml, etc.) to determine if new dependencies are needed.
 4. Check the migrations directory (migrations/, db/migrate/, alembic/,
@@ -50,7 +60,7 @@ If the ticket is dispatchable:
 5. Identify sensitive areas the agent should not touch — auth code,
    payment paths, generated files, vendored code.
 
-HARD cap: 12 tool calls total across both phases.
+HARD cap: 8 tool calls total across both phases. Fewer is better and cheaper.
 
 # Output rules
 
@@ -121,7 +131,7 @@ WITHOUT a send-back. Below 0.5 = "human should plan this first."
 - DO NOT fabricate file paths, dependency names, or migration filenames.
 - DO NOT estimate line counts.
 - DO NOT speculate about contents. Omit instead.
-- DO NOT exceed 12 tool calls total.
+- DO NOT exceed 8 tool calls total.
 - If uncertain about any field, return null or empty array — never guess.
 
 # Style

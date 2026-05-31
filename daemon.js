@@ -38,7 +38,9 @@ const githubOAuthFlows = new Map();
 const blueprintJobs = new Map();
 const blueprintQueue = [];
 let activeBlueprintJobs = 0;
-const MAX_BACKGROUND_BLUEPRINT_JOBS = Number(process.env.LOUPE_BLUEPRINT_CONCURRENCY || 1);
+// 3 parallel blueprint jobs fills a typical inbox in ~2 min instead of ~5.
+// Lower to 1–2 if you hit Claude/Codex rate limits.
+const MAX_BACKGROUND_BLUEPRINT_JOBS = Number(process.env.LOUPE_BLUEPRINT_CONCURRENCY || 3);
 
 function findClaudeBin() {
   // 1. claude on PATH
