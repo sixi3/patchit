@@ -270,6 +270,14 @@ struct HomeView: View {
                     dimensions[VerticalAlignment.center]
                 }
             Spacer(minLength: 0)
+            if let lastSynced = store.lastSynced {
+                (Text("Updated ") + Text(lastSynced, style: .relative))
+                    .font(LoupeFont.caption)
+                    .foregroundStyle(Color.textSecondary)
+                    .alignmentGuide(.inboxBadge) { dimensions in
+                        dimensions[.firstTextBaseline] - 4
+                    }
+            }
         }
         .padding(.vertical, 18)
     }

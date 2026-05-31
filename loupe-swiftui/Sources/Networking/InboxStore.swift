@@ -20,6 +20,7 @@ final class InboxStore {
     private(set) var workstation: String = "Anands-Mac-mini.local"
     private(set) var onlineAgents: [Agent] = [.codex, .claude]
     private(set) var pairing: Pairing?
+    private(set) var lastSynced: Date?
     private(set) var githubConnected = true   // flips false on GITHUB_AUTH_REQUIRED
     @ObservationIgnored private var blueprintPollTask: Task<Void, Never>?
 
@@ -63,6 +64,7 @@ final class InboxStore {
             }
             let payload = try await client.inbox()
             items = payload.assigned.map { $0.toInboxItem() }
+            lastSynced = Date()
             githubConnected = true
             phase = .loaded
             scheduleBlueprintPollIfNeeded()
