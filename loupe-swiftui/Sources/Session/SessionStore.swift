@@ -5,7 +5,7 @@ import Observation
 // Dispatches a ticket, then streams the agent's events live over SSE.
 @MainActor
 @Observable
-final class SessionStore {
+final class SessionStore: Identifiable {
     enum Phase: Equatable {
         case dispatching
         case streaming
@@ -13,8 +13,10 @@ final class SessionStore {
         case failed(String)
     }
 
+    let id = UUID()
     let item: InboxItem
     let harness: Agent
+    let startedAt = Date()
     private let pairing: Pairing
     private let workspaceId: String?
 
@@ -42,6 +44,30 @@ final class SessionStore {
 
     /// True once the agent pushed a branch we can open a PR from.
     var hasBranch: Bool { branch != nil }
+
+    /// Live (still working) vs. settled (completed/failed) — drives the pill count.
+    var isRunning: Bool { phase == .dispatching || phase == .streaming }
+
+    /// Short status for the sessions list row.
+    var statusLabel: String {
+        if prRef != nil { return "PR ready" }
+        switch phase {
+        case .dispatching: return "Starting…"
+        case .streaming:   return "Working…"
+        case .completed(let ok): return ok ? "Completed" : "Finished with issues"
+        case .failed:      return "Failed"
+        }
+    }
+
+    enum StatusTone { case running, prReady, completed, failed }
+    var statusTone: StatusTone {
+        if prRef != nil { return .prReady }
+        switch phase {
+        case .dispatching, .streaming: return .running
+        case .completed(let ok):       return ok ? .completed : .failed
+        case .failed:                  return .failed
+        }
+    }
 
     func start() async {
         phase = .dispatching

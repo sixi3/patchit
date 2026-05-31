@@ -5,12 +5,13 @@ import SwiftUI
 // A shared InboxStore is the single source of truth across both.
 struct RootView: View {
     @State private var store = InboxStore()
+    @State private var sessions = SessionsStore()
 
     var body: some View {
         Group {
             if store.isPaired {
                 if store.githubConnected {
-                    HomeView(store: store)
+                    HomeView(store: store, sessions: sessions)
                 } else {
                     ConnectGitHubView(store: store)
                 }
