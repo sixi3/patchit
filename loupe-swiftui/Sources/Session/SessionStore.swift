@@ -34,6 +34,7 @@ final class SessionStore: Identifiable {
     private(set) var prRef: PRRef?
 
     private var streamTask: Task<Void, Never>?
+    private var hasStarted = false
 
     init(item: InboxItem, pairing: Pairing, harness: Agent? = nil, workspaceId: String? = nil) {
         self.item = item
@@ -70,6 +71,8 @@ final class SessionStore: Identifiable {
     }
 
     func start() async {
+        guard !hasStarted else { return }   // dispatch exactly once
+        hasStarted = true
         phase = .dispatching
         let client = LoupeClient(pairing: pairing)
         do {

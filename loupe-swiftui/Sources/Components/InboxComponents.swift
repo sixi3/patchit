@@ -1,12 +1,13 @@
 import SwiftUI
 
 // MARK: - AgentGlyph
-// Placeholder for the colored agent icons (codex/claude) you'll drop in later.
-// Renders a tinted rounded badge with the agent initial until real assets exist.
+// Uses the colored asset icons (AgentCodex / AgentClaude) when present in the
+// asset catalog; falls back to a tinted badge until those PNGs are added.
 struct AgentGlyph: View {
     let agent: Agent
     var size: CGFloat = 22
 
+    private var assetName: String { agent == .codex ? "AgentCodex" : "AgentClaude" }
     private var tint: Color {
         switch agent {
         case .codex:  return Color(hex: 0xE5533A)   // codex orange
@@ -15,15 +16,25 @@ struct AgentGlyph: View {
     }
 
     var body: some View {
-        RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
-            .fill(tint)
-            .frame(width: size, height: size)
-            .overlay(
-                Text(agent == .codex ? "{ }" : "✦")
-                    .font(.system(size: size * 0.42, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
-            )
-            .accessibilityLabel(agent.label)
+        Group {
+            if UIImage(named: assetName) != nil {
+                Image(assetName)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: size, height: size)
+                    .clipShape(RoundedRectangle(cornerRadius: size * 0.28, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
+                    .fill(tint)
+                    .frame(width: size, height: size)
+                    .overlay(
+                        Text(agent == .codex ? "{ }" : "✦")
+                            .font(.system(size: size * 0.42, weight: .black, design: .rounded))
+                            .foregroundStyle(.white)
+                    )
+            }
+        }
+        .accessibilityLabel(agent.label)
     }
 }
 

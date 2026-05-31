@@ -2717,11 +2717,26 @@ function spawnCodex(session, message, { resume = false } = {}) {
         const payload = JSON.parse(line);
         if (payload.type === "thread.started" && payload.thread_id) {
           session.codexThreadId = payload.thread_id;
+          continue;
         }
-        if (payload.item?.type === "agent_message" && payload.item.text) {
-          noteAgentMessage(session, payload.item.text);
+        const item = payload.item;
+        if (item?.type === "agent_message" && item.text) {
+          noteAgentMessage(session, item.text);
+          addEvent(session, { type: "agent_message", text: item.text });
+        } else if (item?.type === "reasoning" && (item.text || item.summary)) {
+          addEvent(session, { type: "thinking", text: item.text || item.summary });
+        } else if (item?.type === "command_execution") {
+          const cmd = item.command || item.parsed_cmd || "";
+          addEvent(session, { type: "action", tool: "shell", text: cmd ? `$ ${cmd}` : "Ran a command" });
+        } else if (item?.type === "file_change" || item?.type === "patch_apply") {
+          const path = item.path || (Array.isArray(item.changes) && item.changes[0]?.path) || "";
+          addEvent(session, { type: "action", tool: "edit", text: path ? `Edited ${path}` : "Edited files" });
+        } else if (item?.type === "error" && item.text) {
+          addEvent(session, { type: "error", text: item.text });
+        } else {
+          // Unknown item / lifecycle → keep raw for the Thinking accordion only.
+          addEvent(session, { type: "codex", payload });
         }
-        addEvent(session, { type: "codex", payload });
       } catch {
         addEvent(session, { type: "stdout", text: line });
       }
@@ -2872,7 +2887,8 @@ function handleClaudeLine(session, payload, deltaState, flushDelta) {
           kind: "tool_use",
           toolName: block.name,
           toolUseId: block.id,
-          input: inputPreview
+          input: inputPreview,
+          text: inputPreview ? `${block.name}: ${inputPreview}` : block.name
         });
         // Surface Edit/Write/MultiEdit as file changes too so they show up in the files tab.
         const filePath = block.input?.file_path || block.input?.path;
@@ -2881,7 +2897,8 @@ function handleClaudeLine(session, payload, deltaState, flushDelta) {
             type: "claude",
             kind: "file_change",
             path: filePath,
-            changeKind: block.name.toLowerCase()
+            changeKind: block.name.toLowerCase(),
+            text: `Edited ${filePath}`
           });
         }
       } else if (block.type === "text" && block.text) {

@@ -18,8 +18,9 @@ struct SessionView: View {
                 footer
             }
         }
-        .task { await store.start() }
-        .onDisappear { store.cancel() }
+        // The session is started ONCE by SessionsStore on dispatch and keeps
+        // streaming in the background. Opening this view only displays it —
+        // it must not re-dispatch or tear down the stream.
         .fullScreenCover(item: $reviewRef) { ref in
             PRReviewView(store: PRReviewStore(ref: ref, pairing: pairing))
         }
@@ -49,18 +50,26 @@ struct SessionView: View {
         .padding(LoupeSpace.lg)
     }
 
+    private var blocks: [TranscriptBlock] { TranscriptBlock.build(from: store.events) }
+
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(store.events) { event in
-                        EventRow(event: event).id(event.id)
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(blocks) { block in
+                        TranscriptBlockView(
+                            block: block,
+                            agent: store.harness,
+                            isLatest: block.id == blocks.last?.id,
+                            sessionRunning: store.isRunning
+                        )
+                        .id(block.id)
                     }
                 }
                 .padding(LoupeSpace.lg)
             }
             .onChange(of: store.events.count) {
-                if let last = store.events.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+                if let last = blocks.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
             }
         }
     }
@@ -104,48 +113,186 @@ struct SessionView: View {
     }
 }
 
-// MARK: - EventRow
-private struct EventRow: View {
-    let event: SessionEvent
+// MARK: - Event classification
+private extension SessionEvent {
+    enum Category { case message, error, milestone, thinking, hidden }
 
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Circle().fill(tint).frame(width: 6, height: 6).padding(.top, 6)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label).font(LoupeFont.label).foregroundStyle(tint)
-                Text(event.displayText)
-                    .font(isCode ? LoupeFont.code : LoupeFont.body)
-                    .foregroundStyle(Color.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
+    var category: Category {
+        switch type {
+        case "agent_message":        return .message
+        case "claude":               return kind == "message" ? .message : .thinking
+        case "thinking", "action", "codex", "stdout", "status", "command":
+            return .thinking
+        case "error", "stderr":      return .error
+        case "branch":
+            return ["committed", "pr_ready", "compare", "pr_failed"].contains(kind ?? "") ? .milestone : .thinking
+        case "user_message", "done", "handoff":
+            return .hidden            // ticket is in the header; footer/PR handle the rest
+        default:                     return .thinking
+        }
+    }
+
+    /// One readable line for a Thinking step.
+    var stepText: String {
+        if let text, !text.isEmpty { return text }
+        switch type {
+        case "status": return status.map { "Status: \($0)" } ?? "Working…"
+        case "codex":  return "Reasoning…"
+        default:       return type
+        }
+    }
+}
+
+// MARK: - TranscriptBlock
+struct TranscriptBlock: Identifiable {
+    enum Kind { case message, error, milestone, thinking }
+    let id: Int
+    let kind: Kind
+    let events: [SessionEvent]
+
+    /// Group the raw stream: messages/errors/milestones stand alone; runs of
+    /// thinking/action events collapse into one accordion block.
+    static func build(from events: [SessionEvent]) -> [TranscriptBlock] {
+        var blocks: [TranscriptBlock] = []
+        var pendingThinking: [SessionEvent] = []
+
+        func flushThinking() {
+            if let first = pendingThinking.first {
+                blocks.append(.init(id: first.id, kind: .thinking, events: pendingThinking))
+                pendingThinking.removeAll()
             }
         }
+
+        for event in events {
+            switch event.category {
+            case .hidden:
+                continue
+            case .thinking:
+                pendingThinking.append(event)
+            case .message:
+                flushThinking()
+                blocks.append(.init(id: event.id, kind: .message, events: [event]))
+            case .error:
+                flushThinking()
+                blocks.append(.init(id: event.id, kind: .error, events: [event]))
+            case .milestone:
+                flushThinking()
+                blocks.append(.init(id: event.id, kind: .milestone, events: [event]))
+            }
+        }
+        flushThinking()
+        return blocks
+    }
+}
+
+// MARK: - Block rendering
+private struct TranscriptBlockView: View {
+    let block: TranscriptBlock
+    let agent: Agent
+    let isLatest: Bool
+    let sessionRunning: Bool
+
+    var body: some View {
+        switch block.kind {
+        case .message:   MessageBubble(agent: agent, text: block.events.first?.displayText ?? "")
+        case .error:     ErrorBubble(text: block.events.first?.displayText ?? "")
+        case .milestone: MilestoneChip(event: block.events.first)
+        case .thinking:  ThinkingAccordion(events: block.events, active: isLatest && sessionRunning)
+        }
+    }
+}
+
+private struct MessageBubble: View {
+    let agent: Agent
+    let text: String
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            AgentGlyph(agent: agent, size: 24)
+            Text(text)
+                .font(LoupeFont.body)
+                .foregroundStyle(Color.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct ErrorBubble: View {
+    let text: String
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.octagon.fill")
+                .font(.system(size: 13, weight: .bold)).foregroundStyle(Color.riskAlert)
+            Text(text)
+                .font(LoupeFont.code)
+                .foregroundStyle(Color.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: LoupeRadius.chip).fill(Color.riskAlert.opacity(0.08)))
+    }
+}
+
+private struct MilestoneChip: View {
+    let event: SessionEvent?
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 12, weight: .bold)).foregroundStyle(Color.accent)
+            Text(event?.displayText ?? "Milestone")
+                .font(LoupeFont.caption).foregroundStyle(Color.textSecondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: LoupeRadius.chip).fill(Color.accent.opacity(0.08)))
+    }
+}
+
+// MARK: - Thinking accordion (collapsed by default; loader doubles as the toggle)
+private struct ThinkingAccordion: View {
+    let events: [SessionEvent]
+    let active: Bool
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button { withAnimation(.snappy) { expanded.toggle() } } label: {
+                HStack(spacing: 8) {
+                    if active {
+                        ProgressView().controlSize(.mini).tint(Color.textMuted)
+                    } else {
+                        Image(systemName: "brain")
+                            .font(.system(size: 12, weight: .bold)).foregroundStyle(Color.textMuted)
+                    }
+                    Text(active ? "Thinking…" : "Thought · \(events.count) step\(events.count == 1 ? "" : "s")")
+                        .font(LoupeFont.caption).foregroundStyle(Color.textMuted)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .bold)).foregroundStyle(Color.textMuted)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                    Spacer(minLength: 0)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(events) { event in
+                        HStack(alignment: .top, spacing: 6) {
+                            Circle().fill(Color.textMuted.opacity(0.5)).frame(width: 4, height: 4).padding(.top, 6)
+                            Text(event.stepText)
+                                .font(LoupeFont.code)
+                                .foregroundStyle(Color.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+                .padding(.leading, 6)
+            }
+        }
+        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var isCode: Bool { event.type == "stdout" || event.type == "stderr" }
-
-    private var label: String {
-        switch event.type {
-        case "user_message": return "YOU"
-        case "claude":       return "CLAUDE"
-        case "codex":        return "CODEX"
-        case "stdout":       return "OUTPUT"
-        case "stderr":       return "STDERR"
-        case "branch":       return "BRANCH"
-        case "handoff":      return "HANDOFF"
-        case "status":       return "STATUS"
-        case "done":         return "DONE"
-        case "error":        return "ERROR"
-        default:             return event.type.uppercased()
-        }
-    }
-
-    private var tint: Color {
-        switch event.type {
-        case "error", "stderr": return .riskAlert
-        case "done":            return .ringHigh
-        case "branch", "handoff": return .accent
-        default:                return .textMuted
-        }
+        .background(RoundedRectangle(cornerRadius: LoupeRadius.chip).fill(Color.chipFill.opacity(0.6)))
     }
 }
