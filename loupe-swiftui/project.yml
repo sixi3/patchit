@@ -14,12 +14,19 @@ targets:
     platform: iOS
     sources:
       - Sources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Loupe
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSCameraUsageDescription: Loupe scans the pairing QR code shown by the Mac daemon.
+        NSLocalNetworkUsageDescription: Loupe connects to the Loupe daemon running on your Mac over your local network.
+        UILaunchScreen: {}
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sixi3.loupe.swiftui
         PRODUCT_NAME: LoupeSwiftUI
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Loupe
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES

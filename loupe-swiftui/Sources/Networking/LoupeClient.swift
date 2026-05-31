@@ -113,6 +113,25 @@ actor LoupeClient {
         }
     }
 
+    // MARK: Stale refresh
+    /// Force-regenerate a stale blueprint for one issue (daemon re-fetches it).
+    func refreshBlueprint(owner: String, repo: String, number: Int) async throws {
+        let empty = try JSONSerialization.data(withJSONObject: [:])
+        _ = try await postEnvelope(path: "/api/v1/blueprints/\(owner)/\(repo)/\(number)/refresh",
+                                   body: empty, as: EmptyData.self)
+    }
+
+    // MARK: GitHub Device Flow (alpha connect)
+    func githubDeviceStart() async throws -> GitHubDeviceStart {
+        let empty = try JSONSerialization.data(withJSONObject: [:])
+        return try await request(path: "/api/github/oauth/start", method: "POST", body: empty, as: GitHubDeviceStart.self)
+    }
+
+    func githubDevicePoll(flowId: String) async throws -> GitHubDevicePoll {
+        let body = try JSONSerialization.data(withJSONObject: ["flowId": flowId])
+        return try await request(path: "/api/github/oauth/poll", method: "POST", body: body, as: GitHubDevicePoll.self)
+    }
+
     // MARK: Core
     /// For envelope endpoints: { ok, data, error }.
     private func getEnvelope<T: Decodable>(path: String, as type: T.Type) async throws -> T {
@@ -152,6 +171,10 @@ actor LoupeClient {
             if let env = try? JSONDecoder().decode(APIEnvelope<EmptyData>.self, from: data), let e = env.error {
                 throw LoupeError.api(e)
             }
+            if let bare = try? JSONDecoder().decode(BareErrorResponse.self, from: data),
+               let message = bare.message {
+                throw LoupeError.api(.init(code: "HTTP_\(http.statusCode)", message: message, retryable: false))
+            }
             throw LoupeError.http(http.statusCode)
         }
 
@@ -163,4 +186,21 @@ actor LoupeClient {
     }
 
     private struct EmptyData: Decodable {}
+
+    private struct BareErrorResponse: Decodable {
+        let error: String?
+        let message: String?
+
+        enum CodingKeys: String, CodingKey {
+            case error, message
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let decodedError = try? c.decode(String.self, forKey: .error)
+            let decodedMessage = try? c.decode(String.self, forKey: .message)
+            self.error = decodedError
+            self.message = decodedMessage ?? decodedError
+        }
+    }
 }

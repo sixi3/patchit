@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Ticket detail tabs
 enum TicketDetailTab: Hashable {
@@ -11,8 +12,10 @@ enum TicketDetailTab: Hashable {
 // repo pill, confidence ring + summary, metric tabs, detail panel, dispatch row.
 struct TicketCard: View {
     let item: InboxItem
-    var onDispatch: () -> Void = {}
-    var onMore: () -> Void = {}
+    var onDispatch: (Agent) -> Void = { _ in }
+    var onRefreshBlueprint: () -> Void = {}
+
+    @Environment(\.openURL) private var openURL
 
     @State private var selectedTab: TicketDetailTab = .files
     @State private var isSummaryExpanded = false
@@ -106,6 +109,7 @@ struct TicketCard: View {
             }
 
             if item.isDegraded { degradedNotice }
+            if item.isStale { staleNotice }
 
             HStack(alignment: .center, spacing: 12) {
                 ConfidenceRing(value: item.isAnalyzing ? 0 : item.confidence)
@@ -172,7 +176,7 @@ struct TicketCard: View {
 
     private var dispatchRow: some View {
         HStack(spacing: 10) {
-            Button(action: onDispatch) {
+            Button { onDispatch(item.targetAgent) } label: {
                 HStack(spacing: 8) {
                     Text(dispatchTitle)
                         .font(LoupeFont.button)
@@ -193,7 +197,35 @@ struct TicketCard: View {
             .buttonStyle(.plain)
             .disabled(!item.isReady)
 
-            Button(action: onMore) {
+            Menu {
+                Button {
+                    onDispatch(item.alternateAgent)
+                } label: {
+                    Label("Dispatch with \(item.alternateAgent.label)", systemImage: "paperplane.fill")
+                }
+                .disabled(!item.isReady)
+
+                if item.isStale {
+                    Button {
+                        onRefreshBlueprint()
+                    } label: {
+                        Label("Refresh Blueprint", systemImage: "arrow.clockwise")
+                    }
+                }
+
+                if let url = URL(string: item.issueURL), !item.issueURL.isEmpty {
+                    Button {
+                        openURL(url)
+                    } label: {
+                        Label("Open in GitHub", systemImage: "arrow.up.right.square")
+                    }
+                    Button {
+                        UIPasteboard.general.string = item.issueURL
+                    } label: {
+                        Label("Copy Link", systemImage: "link")
+                    }
+                }
+            } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(Color.textSecondary)
@@ -209,6 +241,32 @@ struct TicketCard: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    private var staleNotice: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Color(hex: 0xE8912A))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(staleTitle)
+                    .font(LoupeFont.caption)
+                    .foregroundStyle(Color.textPrimary)
+                if let reason = item.staleReason {
+                    Text(reason)
+                        .font(LoupeFont.caption)
+                        .foregroundStyle(Color.textSecondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
+            Button("Refresh") { onRefreshBlueprint() }
+                .font(LoupeFont.caption)
+                .foregroundStyle(Color.accent)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: LoupeRadius.chip).fill(Color(hex: 0xE8912A, alpha: 0.10)))
     }
 
     private var degradedNotice: some View {
@@ -235,5 +293,12 @@ struct TicketCard: View {
     private var dispatchTitle: String {
         if item.isAnalyzing { return "Analyzing" }
         return item.isReady ? "Dispatch" : "Needs info"
+    }
+
+    private var staleTitle: String {
+        if item.staleCount > 0 {
+            return "\(item.staleCount) blueprint file\(item.staleCount == 1 ? "" : "s") changed"
+        }
+        return "Blueprint may be stale"
     }
 }

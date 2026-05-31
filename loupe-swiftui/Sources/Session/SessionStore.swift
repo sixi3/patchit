@@ -14,6 +14,7 @@ final class SessionStore {
     }
 
     let item: InboxItem
+    let harness: Agent
     private let pairing: Pairing
     private let workspaceId: String?
 
@@ -32,8 +33,9 @@ final class SessionStore {
 
     private var streamTask: Task<Void, Never>?
 
-    init(item: InboxItem, pairing: Pairing, workspaceId: String? = nil) {
+    init(item: InboxItem, pairing: Pairing, harness: Agent? = nil, workspaceId: String? = nil) {
         self.item = item
+        self.harness = harness ?? item.targetAgent
         self.pairing = pairing
         self.workspaceId = workspaceId
     }
@@ -45,7 +47,7 @@ final class SessionStore {
         phase = .dispatching
         let client = LoupeClient(pairing: pairing)
         do {
-            let resp = try await client.dispatch(item.dispatchRequest(workspaceId: workspaceId))
+            let resp = try await client.dispatch(item.dispatchRequest(workspaceId: workspaceId, harness: harness))
             sessionId = resp.sessionId
             branch = resp.branch
             phase = .streaming

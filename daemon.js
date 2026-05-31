@@ -24,6 +24,7 @@ const BLUEPRINT_SCHEMA_FILE = path.join(ROOT, "blueprint.schema.json");
 const BLUEPRINT_CACHE_DIR = path.join(LOUPE_HOME, "blueprints");
 const GITHUB_OAUTH_CLIENT_ID = process.env.GITHUB_OAUTH_CLIENT_ID || "";
 const GITHUB_OAUTH_SCOPES = process.env.GITHUB_OAUTH_SCOPES || "repo read:user";
+const ENABLE_TUNNEL = process.argv.includes("--tunnel") || process.env.LOUPE_TUNNEL === "1";
 
 const sessions = new Map();
 const plans = new Map();
@@ -570,6 +571,19 @@ function normalizeIssuePayload(issue, repoFullName) {
   };
 }
 
+function workspaceBindingForRepo(repoFullName) {
+  const [owner, repo] = String(repoFullName || "").split("/");
+  if (!owner || !repo) return null;
+  const matches = listWorkspaceBindings().filter((binding) =>
+    binding.owner.toLowerCase() === owner.toLowerCase() &&
+    binding.repo.toLowerCase() === repo.toLowerCase()
+  );
+  return matches.find((binding) => {
+    const workspace = workspaces.find((item) => item.id === binding.workspaceId);
+    return workspace && workspaceReadiness(workspace).canDispatch;
+  }) || matches[0] || null;
+}
+
 async function createGithubIssue({ repoFullName, title, body = "", assignSelf = true }) {
   const token = getGithubAccessToken();
   if (!token) {
@@ -578,8 +592,7 @@ async function createGithubIssue({ repoFullName, title, body = "", assignSelf = 
     throw err;
   }
 
-  const bindings = listWorkspaceBindings();
-  const binding = bindings.find((item) => `${item.owner}/${item.repo}`.toLowerCase() === String(repoFullName || "").toLowerCase());
+  const binding = workspaceBindingForRepo(repoFullName);
   if (!binding) {
     const err = new Error("Choose a GitHub repo that is bound to one of your Loupe workspaces.");
     err.statusCode = 400;
@@ -843,10 +856,10 @@ function getPrimaryPairingUrl() {
 // optional: enabled with LOUPE_TUNNEL=1. No-op (logs a hint) if cloudflared is
 // not installed. Does NOT change the auth model — the same pair token is used.
 function startTunnel() {
-  if (process.env.LOUPE_TUNNEL !== "1") return;
+  if (!ENABLE_TUNNEL) return;
   const probe = spawnSync("cloudflared", ["--version"], { encoding: "utf8" });
   if (probe.status !== 0) {
-    console.log("LOUPE_TUNNEL=1 set but `cloudflared` is not installed.");
+    console.log("--tunnel set but `cloudflared` is not installed.");
     console.log("  Install with: brew install cloudflared");
     return;
   }
@@ -1176,23 +1189,25 @@ function spawnSessionTurn(session, message, { resume = false } = {}) {
     addEvent(session, { type: "error", text: error.message });
   });
 
-  child.on("close", (code) => {
+  child.on("close", async (code) => {
     if (session._flushStdout) session._flushStdout();
     session.exitCode = code;
     session.status = code === 0 ? "completed" : "failed";
     session.child = null;
+    // After the agent stops, push the branch (if any) and surface the PR URL.
+    if (session.branch && code === 0) {
+      try {
+        await finalizeBranch(session);
+      } catch (error) {
+        addEvent(session, { type: "branch", kind: "error", text: `Could not finalize PR: ${error.message}` });
+      }
+    }
     addEvent(session, {
       type: "done",
       status: session.status,
       exitCode: code,
       text: code === 0 ? `${harness.label} session completed.` : `${harness.label} exited with code ${code}.`
     });
-    // After the agent stops, push the branch (if any) and surface the PR URL.
-    if (session.branch && code === 0) {
-      finalizeBranch(session).catch((error) => {
-        addEvent(session, { type: "branch", kind: "error", text: `Could not finalize PR: ${error.message}` });
-      });
-    }
   });
 
   return child;
@@ -1616,6 +1631,8 @@ function publicBlueprint(blueprint) {
     provider: blueprint.provider,
     cached: !!blueprint.cached,
     stale: !!blueprint.stale,
+    staleFiles: blueprint.staleFiles || [],
+    stale_files: blueprint.staleFiles || [],
     staleReason: blueprint.staleReason || null,
     repoSha: blueprint.repoSha || null,
     ticketHash: blueprint.ticketHash || null,
@@ -1909,6 +1926,12 @@ function blueprintModelAlias() {
 function executionModelAlias() {
   return process.env.LOUPE_EXECUTION_MODEL || config.models?.execution || "sonnet";
 }
+function codexExecutionModelAlias() {
+  return process.env.LOUPE_CODEX_EXECUTION_MODEL || config.models?.codexExecution || "gpt-5.5";
+}
+function executionModelAliasForHarness(harnessId) {
+  return harnessId === "codex" ? codexExecutionModelAlias() : executionModelAlias();
+}
 // Hybrid blueprint routing: Sonnet for routine tickets (cheap), Opus only when
 // the ticket touches a risk area where a wrong plan is costly. Override via
 // LOUPE_BLUEPRINT_MODEL or config.models.blueprint.
@@ -1948,7 +1971,7 @@ function estimateExecutionCost(blueprint) {
   const fileCount = Array.isArray(blueprint.files) ? blueprint.files.length : 0;
   const riskCount = Array.isArray(blueprint.riskAreas) ? blueprint.riskAreas.length : 0;
   const factor = 1 + Math.max(0, fileCount - 3) * 0.08 + riskCount * 0.12;
-  const model = executionModelAlias();
+  const model = executionModelAliasForHarness(blueprint.defaultAgent === "claude" ? "claude-code" : "codex");
   const p = pricingFor(model) || MODEL_PRICING.sonnet;
   const inLow = Math.round(bucket.inLow * factor);
   const inHigh = Math.round(bucket.inHigh * factor);
@@ -2059,7 +2082,11 @@ function publicBlueprint(blueprint) {
     // Degraded = real planner failed and we fell back to ticket-text heuristics.
     // The card must show this rather than presenting it as a confident $0 plan.
     degraded: blueprint.provider === "local-heuristic" || blueprint.model === "local-heuristic",
+    stale: !!blueprint.stale,
+    staleFiles: blueprint.staleFiles || [],
+    stale_files: blueprint.staleFiles || [],
     stale_reason: blueprint.staleReason || null,
+    staleReason: blueprint.staleReason || null,
     repo_sha: blueprint.repoSha || null,
     ticket_hash: blueprint.ticketHash || null,
     cost_estimate: costEstimate,
@@ -2644,6 +2671,8 @@ function spawnCodex(session, message, { resume = false } = {}) {
     ? [
         "exec",
         "--json",
+        "--model",
+        executionModelAliasForHarness("codex"),
         "--sandbox",
         "workspace-write",
         "--skip-git-repo-check",
@@ -2656,6 +2685,8 @@ function spawnCodex(session, message, { resume = false } = {}) {
     : [
         "exec",
         "--json",
+        "--model",
+        executionModelAliasForHarness("codex"),
         "--sandbox",
         "workspace-write",
         "--skip-git-repo-check",
@@ -2723,7 +2754,7 @@ function spawnClaudeCode(session, message, { resume = false } = {}) {
     "--include-partial-messages",
     "--model", executionModelAlias(),
     "--permission-mode", "acceptEdits",
-    "--allowedTools", "Bash,WebFetch",
+    "--allowedTools", "Bash",
     "--add-dir", session.workspace.path
   ];
   if (resume) {
@@ -3238,6 +3269,37 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  const blueprintRefreshMatch = url.pathname.match(/^\/api\/v1\/blueprints\/([^/]+)\/([^/]+)\/(\d+)\/refresh$/);
+  if (req.method === "POST" && blueprintRefreshMatch) {
+    try {
+      const safe = parseRepoPair(decodeURIComponent(blueprintRefreshMatch[1]), decodeURIComponent(blueprintRefreshMatch[2]));
+      const number = Number(blueprintRefreshMatch[3]);
+      const repoFullName = `${safe.owner}/${safe.repo}`;
+      const token = getGithubAccessToken();
+      if (!token) {
+        sendJson(res, 401, { ok: false, data: null, error: { code: "GITHUB_AUTH_REQUIRED", message: "Connect GitHub first.", retryable: false } });
+        return;
+      }
+      const binding = workspaceBindingForRepo(repoFullName);
+      if (!binding) {
+        sendJson(res, 400, { ok: false, data: null, error: { code: "WORKSPACE_NOT_BOUND", message: "Bind this GitHub repo to a Loupe workspace before refreshing its Blueprint.", retryable: false } });
+        return;
+      }
+      const workspace = resolveWorkspace(binding.workspaceId);
+      const issue = await githubApiRequest("GET", `/repos/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.repo)}/issues/${number}`, token);
+      const ticket = normalizeIssuePayload(issue, repoFullName);
+      ticket.binding = binding;
+      const body = JSON.parse(await readBody(req) || "{}");
+      const blueprint = await createBlueprint(ticket, workspace.id, body.harness, { bypassCache: true });
+      inboxCache.fetchedAt = 0;
+      inboxCache.payload = null;
+      sendJson(res, 200, { ok: true, data: publicBlueprint(blueprint), error: null });
+    } catch (error) {
+      sendJson(res, error.statusCode || 500, { ok: false, data: null, error: { code: "BLUEPRINT_REFRESH_FAILED", message: error.message, retryable: true } });
+    }
+    return;
+  }
+
   if (req.method === "POST" && (url.pathname === "/api/plans/create" || url.pathname === "/api/blueprints/create")) {
     try {
       const body = JSON.parse(await readBody(req) || "{}");
@@ -3343,7 +3405,7 @@ const server = http.createServer(async (req, res) => {
     try {
       sendJson(res, 200, { ok: true, ...listFolders(url.searchParams.get("path")) });
     } catch (error) {
-      sendJson(res, 500, { ok: false, error: error.message });
+      sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
     }
     return;
   }
@@ -3362,7 +3424,7 @@ const server = http.createServer(async (req, res) => {
         workspaces
       });
     } catch (error) {
-      sendJson(res, 500, { ok: false, error: error.message });
+      sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
     }
     return;
   }
@@ -3387,7 +3449,7 @@ const server = http.createServer(async (req, res) => {
         branch: session.branch ? { name: session.branch.name, base: session.branch.base, repo: `${session.branch.binding.owner}/${session.branch.binding.repo}` } : null
       });
     } catch (error) {
-      sendJson(res, 500, { ok: false, error: error.message });
+      sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
     }
     return;
   }

@@ -4,6 +4,7 @@ import UIKit
 // Collapsed summary uses a word-boundary prefix that fits exactly two lines at the
 // measured width, so expanding to the full string does not reflow the first lines.
 
+@MainActor
 enum SummaryTruncation {
     private static let fontSize: CGFloat = 15
     private static let font: UIFont = UIFont(name: "FamiljenGrotesk-Regular", size: fontSize)
