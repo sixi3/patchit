@@ -35,6 +35,7 @@ final class SessionStore: Identifiable {
 
     private var streamTask: Task<Void, Never>?
     private var hasStarted = false
+    private var lastError: String?
 
     init(item: InboxItem, pairing: Pairing, harness: Agent? = nil, workspaceId: String? = nil) {
         self.item = item
@@ -95,6 +96,9 @@ final class SessionStore: Identifiable {
                 for try await event in client.events(sessionId: sessionId, since: 0) {
                     guard let self else { return }
                     self.events.append(event)
+                    if event.type == "error", let text = event.text, !text.isEmpty {
+                        self.lastError = text
+                    }
                     if event.type == "branch", event.kind == "pr_ready",
                        let number = event.prNumber, let repo = event.repo {
                         let parts = repo.split(separator: "/", maxSplits: 1).map(String.init)
@@ -103,7 +107,11 @@ final class SessionStore: Identifiable {
                         }
                     }
                     if event.type == "done" {
-                        self.phase = .completed(success: event.status == "completed")
+                        if event.status != "completed", let err = self.lastError {
+                            self.phase = .failed(err)
+                        } else {
+                            self.phase = .completed(success: event.status == "completed")
+                        }
                     }
                 }
             } catch {

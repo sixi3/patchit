@@ -2715,16 +2715,27 @@ function spawnCodex(session, message, { resume = false } = {}) {
       if (!line.trim()) continue;
       try {
         const payload = JSON.parse(line);
-        if (payload.type === "thread.started" && payload.thread_id) {
-          session.codexThreadId = payload.thread_id;
+        // Top-level failures (usage limits, failed turns) — surface as errors.
+        if (payload.type === "error" || payload.type === "turn.failed") {
+          addEvent(session, { type: "error", text: payload.message || payload.error?.message || "Codex run failed." });
           continue;
+        }
+        if (payload.type === "thread.started") {
+          if (payload.thread_id) session.codexThreadId = payload.thread_id;
+          continue;
+        }
+        if (payload.type === "turn.started" || payload.type === "turn.completed") {
+          continue; // lifecycle noise — nothing to show
         }
         const item = payload.item;
         if (item?.type === "agent_message" && item.text) {
           noteAgentMessage(session, item.text);
           addEvent(session, { type: "agent_message", text: item.text });
-        } else if (item?.type === "reasoning" && (item.text || item.summary)) {
-          addEvent(session, { type: "thinking", text: item.text || item.summary });
+        } else if (item?.type === "reasoning") {
+          const rtext = item.text
+            || (Array.isArray(item.summary) ? item.summary.map((x) => x?.text || x).join(" ") : item.summary)
+            || "Thinking…";
+          addEvent(session, { type: "thinking", text: rtext });
         } else if (item?.type === "command_execution") {
           const cmd = item.command || item.parsed_cmd || "";
           addEvent(session, { type: "action", tool: "shell", text: cmd ? `$ ${cmd}` : "Ran a command" });
@@ -2733,10 +2744,10 @@ function spawnCodex(session, message, { resume = false } = {}) {
           addEvent(session, { type: "action", tool: "edit", text: path ? `Edited ${path}` : "Edited files" });
         } else if (item?.type === "error" && item.text) {
           addEvent(session, { type: "error", text: item.text });
-        } else {
-          // Unknown item / lifecycle → keep raw for the Thinking accordion only.
-          addEvent(session, { type: "codex", payload });
+        } else if (item?.type) {
+          addEvent(session, { type: "thinking", text: String(item.type).replace(/_/g, " ") });
         }
+        // else: unknown lifecycle line → drop (never show as "Reasoning")
       } catch {
         addEvent(session, { type: "stdout", text: line });
       }

@@ -137,7 +137,6 @@ private extension SessionEvent {
         if let text, !text.isEmpty { return text }
         switch type {
         case "status": return status.map { "Status: \($0)" } ?? "Working…"
-        case "codex":  return "Reasoning…"
         default:       return type
         }
     }
