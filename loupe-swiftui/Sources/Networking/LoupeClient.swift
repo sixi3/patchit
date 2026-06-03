@@ -18,7 +18,8 @@ actor LoupeClient {
         self.token = pairing.token
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest = 15
-        cfg.waitsForConnectivity = true
+        cfg.timeoutIntervalForResource = 20
+        cfg.waitsForConnectivity = false
         self.session = URLSession(configuration: cfg)
 
         let stream = URLSessionConfiguration.default

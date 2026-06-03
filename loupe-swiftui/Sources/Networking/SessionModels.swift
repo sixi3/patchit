@@ -60,6 +60,10 @@ struct SessionSnapshot: Decodable, Identifiable {
     let dispatch: SnapshotDispatch?
     let branch: DispatchResponse.Branch?
 
+    enum CodingKeys: String, CodingKey {
+        case id, harnessId, message, status, events, nextEventId, startedAt, exitCode, dispatch, branch
+    }
+
     struct SnapshotDispatch: Decodable {
         let ticket: Ticket?
         let mode: String?
@@ -70,6 +74,31 @@ struct SessionSnapshot: Decodable, Identifiable {
             let title: String?
             let url: String?
             let kind: String?
+        }
+    }
+
+    private struct SnapshotBranch: Decodable {
+        let name: String?
+        let base: String?
+        let repo: String?
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        harnessId = try c.decodeIfPresent(String.self, forKey: .harnessId)
+        message = try c.decodeIfPresent(String.self, forKey: .message)
+        status = try c.decodeIfPresent(String.self, forKey: .status)
+        events = try c.decodeIfPresent([SessionEvent].self, forKey: .events) ?? []
+        nextEventId = try c.decodeIfPresent(Int.self, forKey: .nextEventId)
+        startedAt = try c.decodeIfPresent(String.self, forKey: .startedAt)
+        exitCode = try c.decodeIfPresent(Int.self, forKey: .exitCode)
+        dispatch = try c.decodeIfPresent(SnapshotDispatch.self, forKey: .dispatch)
+        if let rawBranch = try c.decodeIfPresent(SnapshotBranch.self, forKey: .branch),
+           let name = rawBranch.name {
+            branch = .init(name: name, base: rawBranch.base ?? "", repo: rawBranch.repo ?? dispatch?.ticket?.repo ?? "")
+        } else {
+            branch = nil
         }
     }
 }
@@ -90,6 +119,39 @@ struct SessionEvent: Decodable, Identifiable {
     let prNumber: Int?
     let prUrl: String?
     let compareUrl: String?
+    let tool: String?
+    let toolName: String?
+    let path: String?
+    let input: String?
+    let output: String?
+    let changeKind: String?
+    let isError: Bool?
+    let additions: Int?
+    let deletions: Int?
+    let patch: String?
+    let handoff: Handoff?
+
+    struct Handoff: Decodable {
+        let tldr: String?
+        let whatChanged: [String]?
+        let filesChanged: [String]?
+        let testsRun: [String]?
+        let testsNotRun: [String]?
+        let assumptions: [String]?
+        let risks: [String]?
+        let confidence: Double?
+
+        enum CodingKeys: String, CodingKey {
+            case tldr
+            case whatChanged = "what_changed"
+            case filesChanged = "files_changed"
+            case testsRun = "tests_run"
+            case testsNotRun = "tests_not_run"
+            case assumptions
+            case risks
+            case confidence
+        }
+    }
 
     /// Human-facing line for the transcript.
     var displayText: String {

@@ -25,7 +25,6 @@ final class SessionsStore {
 
     func hydrate(pairing: Pairing, force: Bool = false) async {
         guard force || hydratedPairingHost != pairing.host else { return }
-        hydratedPairingHost = pairing.host
         do {
             let snapshots = try await LoupeClient(pairing: pairing).sessions()
             let existing = Dictionary(uniqueKeysWithValues: sessions.compactMap { store in
@@ -38,7 +37,9 @@ final class SessionsStore {
             for session in sessions {
                 session.reconnectIfRunning()
             }
+            hydratedPairingHost = pairing.host
         } catch {
+            hydratedPairingHost = nil
             // Sessions are convenience state; inbox connectivity surfaces errors.
         }
     }

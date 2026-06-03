@@ -299,6 +299,8 @@ struct HomeView: View {
 
     private var agentPillButton: some View {
         let running = sessions.runningCount
+        let total = sessions.sessions.count
+        let count = running > 0 ? running : total
         return Button { showSessions = true } label: {
             HStack(spacing: 6) {
                 ZStack {
@@ -310,8 +312,8 @@ struct HomeView: View {
                 }
                 .frame(width: LoupeSize.agentBadge + CGFloat(max(0, onlineAgents.count - 1)) * 14, alignment: .leading)
 
-                if running > 0 {
-                    Text("\(running)")
+                if count > 0 {
+                    Text("\(count)")
                         .font(.system(size: 14, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.accent)
                         .contentTransition(.numericText())
@@ -323,14 +325,18 @@ struct HomeView: View {
             .contentShape(Capsule())
             .loupeGlassCapsule(interactive: true)
             .overlay {
-                if running > 0 {
+                if count > 0 {
                     Capsule().stroke(Color.accent, lineWidth: 1.5)
                 }
             }
         }
         .buttonStyle(.plain)
-        .animation(.snappy, value: running)
-        .accessibilityLabel(running > 0 ? "\(running) running session\(running == 1 ? "" : "s"), tap to view" : "Sessions")
+        .animation(.snappy, value: count)
+        .accessibilityLabel(
+            running > 0
+                ? "\(running) running session\(running == 1 ? "" : "s"), tap to view"
+                : "\(total) session\(total == 1 ? "" : "s"), tap to view"
+        )
     }
 
     private func syncLabel(for date: Date) -> String {

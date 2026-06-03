@@ -887,12 +887,12 @@ function getPrimaryPairingUrl() {
 // optional: enabled with LOUPE_TUNNEL=1. No-op (logs a hint) if cloudflared is
 // not installed. Does NOT change the auth model — the same pair token is used.
 function startTunnel() {
-  if (!ENABLE_TUNNEL) return;
+  if (!ENABLE_TUNNEL) return false;
   const probe = spawnSync("cloudflared", ["--version"], { encoding: "utf8" });
   if (probe.status !== 0) {
     console.log("--tunnel set but `cloudflared` is not installed.");
     console.log("  Install with: brew install cloudflared");
-    return;
+    return false;
   }
   const child = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${PORT}`], {
     stdio: ["ignore", "pipe", "pipe"]
@@ -914,6 +914,7 @@ function startTunnel() {
     tunnelUrl = null;
   });
   process.on("exit", () => child.kill());
+  return true;
 }
 
 // Render a QR code in the terminal. Uses the `qrencode` CLI if available
@@ -2771,8 +2772,23 @@ function spawnCodex(session, message, { resume = false } = {}) {
           const cmd = item.command || item.parsed_cmd || "";
           addEvent(session, { type: "action", tool: "shell", text: cmd ? `$ ${cmd}` : "Ran a command" });
         } else if (item?.type === "file_change" || item?.type === "patch_apply") {
-          const path = item.path || (Array.isArray(item.changes) && item.changes[0]?.path) || "";
-          addEvent(session, { type: "action", tool: "edit", text: path ? `Edited ${path}` : "Edited files" });
+          const changes = normalizeCodexFileChanges(item);
+          if (changes.length) {
+            for (const change of changes) {
+              addEvent(session, {
+                type: "action",
+                tool: "edit",
+                path: change.path,
+                status: change.status,
+                additions: change.additions,
+                deletions: change.deletions,
+                patch: change.patch,
+                text: change.path ? `Edited ${change.path}` : "Edited files"
+              });
+            }
+          } else {
+            addEvent(session, { type: "action", tool: "edit", text: "Edited files" });
+          }
         } else if (item?.type === "error" && item.text) {
           addEvent(session, { type: "error", text: item.text });
         } else if (item?.type) {
@@ -2935,11 +2951,16 @@ function handleClaudeLine(session, payload, deltaState, flushDelta) {
         // Surface Edit/Write/MultiEdit as file changes too so they show up in the files tab.
         const filePath = block.input?.file_path || block.input?.path;
         if (filePath && ["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(block.name)) {
+          const diffPreview = toolInputDiffPreview(block.name, block.input);
           addEvent(session, {
             type: "claude",
             kind: "file_change",
             path: filePath,
             changeKind: block.name.toLowerCase(),
+            status: block.name === "Write" ? "added" : "modified",
+            additions: diffPreview.additions,
+            deletions: diffPreview.deletions,
+            patch: diffPreview.patch,
             text: `Edited ${filePath}`
           });
         }
@@ -3010,6 +3031,91 @@ function previewToolInput(toolName, input) {
   } catch {
     return String(input);
   }
+}
+
+function toolInputDiffPreview(toolName, input) {
+  const empty = { additions: 0, deletions: 0, patch: "" };
+  if (!input) return empty;
+
+  const trimLines = (value) => String(value || "").split(/\r?\n/).slice(0, 12);
+  const summarize = (removed, added) => {
+    const oldLines = trimLines(removed);
+    const newLines = trimLines(added);
+    const patch = [
+      "@@ preview @@",
+      ...oldLines.map((line) => `-${line}`),
+      ...newLines.map((line) => `+${line}`)
+    ].join("\n");
+    return {
+      additions: newLines.filter(Boolean).length,
+      deletions: oldLines.filter(Boolean).length,
+      patch
+    };
+  };
+
+  if (toolName === "Edit") {
+    return summarize(input.old_string, input.new_string);
+  }
+
+  if (toolName === "MultiEdit" && Array.isArray(input.edits)) {
+    const additions = input.edits.reduce((sum, edit) => sum + trimLines(edit.new_string).filter(Boolean).length, 0);
+    const deletions = input.edits.reduce((sum, edit) => sum + trimLines(edit.old_string).filter(Boolean).length, 0);
+    const patch = input.edits.slice(0, 3).flatMap((edit, index) => {
+      const preview = summarize(edit.old_string, edit.new_string).patch;
+      return [`@@ edit ${index + 1} @@`, ...preview.split(/\r?\n/).slice(1)];
+    }).join("\n");
+    return { additions, deletions, patch };
+  }
+
+  if (toolName === "Write" && input.content) {
+    const lines = trimLines(input.content);
+    return {
+      additions: lines.filter(Boolean).length,
+      deletions: 0,
+      patch: ["@@ new file preview @@", ...lines.map((line) => `+${line}`)].join("\n")
+    };
+  }
+
+  return empty;
+}
+
+function normalizeCodexFileChanges(item) {
+  const rawChanges = Array.isArray(item?.changes) && item.changes.length
+    ? item.changes
+    : [{ ...item, path: item?.path || item?.file || item?.filename }];
+
+  return rawChanges.map((change) => {
+    const path = change.path || change.file || change.filename || "";
+    const patch = String(change.patch || change.diff || change.unified_diff || "");
+    const stats = diffStats(patch);
+    return {
+      path,
+      status: change.status || change.change_type || change.kind || (item?.type === "patch_apply" ? "modified" : "modified"),
+      additions: numberOr(stats.additions, change.additions, change.added),
+      deletions: numberOr(stats.deletions, change.deletions, change.removed),
+      patch: patch.slice(0, 4000)
+    };
+  }).filter((change) => change.path || change.patch);
+}
+
+function diffStats(patch) {
+  if (!patch) return { additions: 0, deletions: 0 };
+  let additions = 0;
+  let deletions = 0;
+  for (const line of patch.split(/\r?\n/)) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) additions += 1;
+    if (line.startsWith("-")) deletions += 1;
+  }
+  return { additions, deletions };
+}
+
+function numberOr(...values) {
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return 0;
 }
 
 function serveStatic(req, res) {
@@ -3580,11 +3686,16 @@ function startServer() {
     for (const url of getPairingUrls()) {
       console.log(`  ${url}`);
     }
-    // Scan-to-pair QR for the LAN URL immediately; the tunnel prints its own
-    // QR once it connects.
-    console.log("\nScan to pair this phone:");
-    renderQr(getPrimaryPairingUrl());
-    startTunnel();
+    if (ENABLE_TUNNEL) {
+      console.log("\nTunnel mode enabled. Waiting for the public tunnel QR before phone pairing...");
+      if (!startTunnel()) {
+        console.log("\nTunnel unavailable. Scan this LAN QR only if the phone can reach this Mac on the same local network:");
+        renderQr(getPrimaryPairingUrl());
+      }
+    } else {
+      console.log("\nScan to pair this phone:");
+      renderQr(getPrimaryPairingUrl());
+    }
   });
 }
 
