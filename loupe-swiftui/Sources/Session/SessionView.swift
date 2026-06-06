@@ -298,7 +298,7 @@ private struct InlineToolRow: View {
 
     private func editHeader(showsChevron: Bool, expanded: Bool) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .center, spacing: 8) {
+            HStack(alignment: .center, spacing: 6) {
                 Image(systemName: item.event.actionPillIcon)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(item.event.actionPillTint)
@@ -307,13 +307,15 @@ private struct InlineToolRow: View {
                     .font(LoupeFont.body)
                     .foregroundStyle(Color.textSecondary)
                     .lineLimit(1)
-                if let path = item.editFilePath {
-                    SetiIconView(path: path, size: 17)
+                HStack(alignment: .center, spacing: 0) {
+                    if let path = item.editFilePath {
+                        SetiIconView(path: path, size: 17)
+                    }
+                    Text(item.editFileName)
+                        .font(LoupeFont.bodyMedium)
+                        .foregroundStyle(Color.textPrimary)
+                        .lineLimit(1)
                 }
-                Text(item.editFileName)
-                    .font(LoupeFont.bodyMedium)
-                    .foregroundStyle(Color.textPrimary)
-                    .lineLimit(1)
                 Spacer(minLength: 8)
                 editStats
                 if showsChevron {
