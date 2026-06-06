@@ -35,6 +35,7 @@ struct DaemonTicket: Decodable, Identifiable {
 /// GET /api/health → (subset we use)
 struct HealthPayload: Decodable {
     let ok: Bool
+    let hostname: String?
     let cwd: String?
     let defaultHarness: String?
     let workspaces: [Workspace]?
