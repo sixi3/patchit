@@ -31,7 +31,11 @@ final class SessionsStore {
                 store.sessionId.map { ($0, store) }
             })
             let restored = snapshots.map { snapshot in
-                existing[snapshot.id] ?? SessionStore(snapshot: snapshot, pairing: pairing)
+                if let store = existing[snapshot.id] {
+                    store.apply(snapshot: snapshot)
+                    return store
+                }
+                return SessionStore(snapshot: snapshot, pairing: pairing)
             }
             sessions = restored
             for session in sessions {

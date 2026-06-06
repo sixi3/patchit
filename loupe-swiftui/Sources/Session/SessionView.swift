@@ -6,7 +6,7 @@ struct SessionView: View {
     @State var store: SessionStore
     let pairing: Pairing
     @State private var reviewRef: SessionStore.PRRef?
-    @State private var blocks: [TranscriptBlock] = []
+    @State private var proseEvents: [SessionEvent] = []
     @State private var openFacet: HandoffFacet?
 
     /// Condensed "receipt" derived from the finished run — drives the bento dock.
@@ -90,29 +90,15 @@ struct SessionView: View {
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    TimelineItem(icon: "paperplane", tint: .accent, showsConnector: true) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Ticket dispatched to \(store.harness.label)")
-                                .font(LoupeFont.bodyMedium)
-                                .foregroundStyle(Color.textPrimary)
-                            CompactSessionTicket(item: store.item)
+                LazyVStack(alignment: .leading, spacing: 18) {
+                    if proseEvents.isEmpty {
+                        AgentProsePlaceholder(agent: store.harness, isRunning: store.isRunning)
+                            .id("waiting")
+                    } else {
+                        ForEach(proseEvents) { event in
+                            AgentProseMessage(agent: store.harness, text: event.displayText)
+                                .id(event.id)
                         }
-                    }
-                        .id("task")
-
-                    ForEach(blocks) { block in
-                        TranscriptBlockView(
-                            block: block,
-                            agent: store.harness,
-                            isLatest: block.id == blocks.last?.id,
-                            sessionRunning: store.isRunning,
-                            canReview: store.prRef != nil,
-                            onReview: {
-                                if let ref = store.prRef { reviewRef = ref }
-                            }
-                        )
-                        .id(block.id)
                     }
                 }
                 .padding(.top, LoupeSpace.xl)
@@ -120,12 +106,12 @@ struct SessionView: View {
                 .padding(.bottom, LoupeSpace.xxl)
             }
             .onAppear {
-                blocks = TranscriptBlock.build(from: store.events)
+                proseEvents = store.events.filter(\.isNativeAgentProse)
             }
             .onChange(of: store.events.count) {
-                let updatedBlocks = TranscriptBlock.build(from: store.events)
-                blocks = updatedBlocks
-                if let last = updatedBlocks.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+                let updatedEvents = store.events.filter(\.isNativeAgentProse)
+                proseEvents = updatedEvents
+                if let last = updatedEvents.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
             }
         }
     }
@@ -186,6 +172,41 @@ struct SessionView: View {
     }
 }
 
+private struct AgentProseMessage: View {
+    let agent: Agent
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            AgentGlyph(agent: agent, size: 28)
+                .padding(.top, 1)
+            Text(text)
+                .font(LoupeFont.bodyMedium)
+                .foregroundStyle(Color.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct AgentProsePlaceholder: View {
+    let agent: Agent
+    let isRunning: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            AgentGlyph(agent: agent, size: 28)
+                .padding(.top, 1)
+            Text(isRunning ? "Waiting for \(agent.label)..." : "No agent message was captured.")
+                .font(LoupeFont.bodyMedium)
+                .foregroundStyle(Color.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
 // MARK: - Preview facet opener
 // DEBUG-only: `-LoupePreviewFacet <facet>` auto-opens a handoff drawer so the
 // bento drawers can be screenshotted deterministically. No-op in release.
@@ -209,6 +230,13 @@ private struct PreviewFacetOpener: ViewModifier {
 // MARK: - Event classification
 private extension SessionEvent {
     enum Category { case message, error, milestone, handoff, fileChange, activity, runner, hidden }
+
+    var isNativeAgentProse: Bool {
+        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        if type == "agent_message" { return true }
+        if type == "claude", kind == "message" { return true }
+        return false
+    }
 
     var category: Category {
         switch type {

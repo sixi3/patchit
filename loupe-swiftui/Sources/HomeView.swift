@@ -147,6 +147,9 @@ struct HomeView: View {
             haptic.prepare()
             haptic.impactOccurred()
             await store.refresh()
+            if let pairing = store.pairing {
+                await sessions.hydrate(pairing: pairing, force: true)
+            }
         }
     }
 
