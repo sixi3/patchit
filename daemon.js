@@ -1424,7 +1424,10 @@ function emitAgentProse(session, event, rawText) {
   noteAgentMessage(session, rawText);
   const display = stripHandoffBlock(rawText);
   if (!display) return;
-  if (session.lastDisplayedAgentText === display) return;
+  const displayKey = display.replace(/\s+/g, " ").trim();
+  session.displayedAgentTextKeys ||= new Set();
+  if (session.displayedAgentTextKeys.has(displayKey)) return;
+  session.displayedAgentTextKeys.add(displayKey);
   session.lastDisplayedAgentText = display;
   addEvent(session, { ...event, text: display });
 }
