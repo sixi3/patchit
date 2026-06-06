@@ -26,6 +26,47 @@ const GITHUB_OAUTH_CLIENT_ID = process.env.GITHUB_OAUTH_CLIENT_ID || "";
 const GITHUB_OAUTH_SCOPES = process.env.GITHUB_OAUTH_SCOPES || "repo read:user";
 const ENABLE_TUNNEL = process.argv.includes("--tunnel") || process.env.LOUPE_TUNNEL === "1";
 
+// Appended to the initial dispatch so the agent's output has two channels:
+// (1) short plain-sentence narration as it works (the chat stream), and
+// (2) one fenced HANDOFF JSON block at the very end (the condensed handoff).
+// Keys mirror normalizeHandoff() so tryExtractHandoff() captures it verbatim.
+const HANDOFF_CONTRACT = `
+---
+Output protocol (follow exactly):
+
+While you work, narrate in short plain sentences — one line per meaningful step (e.g. "Spinning up a branch.", "Found the toolbar button in HomeView.swift.", "Running the build."). Keep shell commands, raw output, and tool noise out of the narration.
+
+When you are completely finished, end your FINAL message with a single fenced JSON block tagged HANDOFF, and nothing after it:
+
+\`\`\`json
+{
+  "tldr": "<one sentence: what you changed and why>",
+  "what_changed": ["<short bullet>", "..."],
+  "files_changed": ["<path>", "..."],
+  "tests_run": ["<check that passed, e.g. 'xcodebuild succeeded'>", "..."],
+  "tests_not_run": ["<relevant check you did not run>", "..."],
+  "assumptions": ["<assumption a reviewer should verify>", "..."],
+  "risks": ["<low-confidence area or risk>", "..."],
+  "confidence": 0.0
+}
+\`\`\`
+
+Use [] for empty lists and a 0–1 number for confidence. Emit the HANDOFF block only once, in the final message.`;
+
+function withHandoffContract(message) {
+  return `${String(message || "").trim()}\n${HANDOFF_CONTRACT}`;
+}
+
+// The handoff JSON rides inside the agent's final message. tryExtractHandoff()
+// still needs the raw text, but the chat bubble must not show the JSON — strip
+// the fenced handoff block (identified by its "tldr" key) for display only.
+function stripHandoffBlock(text) {
+  return String(text || "")
+    .replace(/```(?:json)?\s*\{[\s\S]*?"tldr"[\s\S]*?\}\s*```/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 const sessions = new Map();
 const plans = new Map();
 const recentRequests = [];
@@ -1212,8 +1253,11 @@ function spawnSessionTurn(session, message, { resume = false } = {}) {
     text: `${resume ? "Resuming" : "Starting"} ${harness.label} on this Mac...`
   });
 
+  // Resume turns already carry the contract from the first turn's context; only
+  // the initial dispatch needs the handoff protocol appended to what the agent sees.
+  const agentInput = resume ? message : withHandoffContract(message);
   const spawner = session.harnessId === "claude-code" ? spawnClaudeCode : spawnCodex;
-  const child = spawner(session, message, { resume });
+  const child = spawner(session, agentInput, { resume });
   session.child = child;
 
   child.on("error", (error) => {
@@ -1377,12 +1421,46 @@ function noteAgentMessage(session, text) {
 }
 
 function changedFilesFromCachedDiff(cwd) {
-  const result = gitRun(cwd, ["diff", "--cached", "--name-status"]);
-  if (result.status !== 0) return [];
-  return result.stdout
+  return changedFileStatsFromCachedDiff(cwd).map((file) => file.path);
+}
+
+function changedFileStatsFromCachedDiff(cwd) {
+  const numstat = gitRun(cwd, ["diff", "--cached", "--numstat"]);
+  if (numstat.status !== 0) return [];
+
+  const status = gitRun(cwd, ["diff", "--cached", "--name-status"]);
+  const statuses = new Map();
+  if (status.status === 0) {
+    for (const line of status.stdout.split(/\r?\n/)) {
+      const parts = line.trim().split(/\s+/).filter(Boolean);
+      if (parts.length >= 2) {
+        statuses.set(parts[parts.length - 1], parts[0]);
+      }
+    }
+  }
+
+  return numstat.stdout
     .split(/\r?\n/)
-    .map((line) => line.trim().split(/\s+/).slice(-1)[0])
+    .map((line) => {
+      const parts = line.trim().split(/\t/);
+      if (parts.length < 3) return null;
+      const [added, removed, path] = parts;
+      return {
+        path,
+        status: gitStatusKind(statuses.get(path)),
+        additions: Number.isFinite(Number(added)) ? Number(added) : 0,
+        deletions: Number.isFinite(Number(removed)) ? Number(removed) : 0
+      };
+    })
     .filter(Boolean);
+}
+
+function gitStatusKind(status) {
+  if (!status) return "modified";
+  if (status.startsWith("A")) return "added";
+  if (status.startsWith("D")) return "removed";
+  if (status.startsWith("R")) return "renamed";
+  return "modified";
 }
 
 function buildSessionHandoff(session, changedFiles) {
@@ -2622,10 +2700,22 @@ async function finalizeBranch(session) {
     gitRun(cwd, ["branch", "-D", branch]);
     return;
   }
-  const changedFiles = changedFilesFromCachedDiff(cwd);
+  const changedFileStats = changedFileStatsFromCachedDiff(cwd);
+  const changedFiles = changedFileStats.map((file) => file.path);
   const handoff = buildSessionHandoff(session, changedFiles);
   const deviation = compareBlueprintHandoff(session.dispatch?.plan, changedFiles, handoff);
   session.deviation = deviation;
+  for (const file of changedFileStats) {
+    addEvent(session, {
+      type: "file_change",
+      kind: "git_diff",
+      path: file.path,
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+      text: `Changed ${file.path}`
+    });
+  }
   addEvent(session, { type: "handoff", kind: "ready", handoff });
   addEvent(session, { type: "deviations_computed", deviation });
 
@@ -2762,7 +2852,8 @@ function spawnCodex(session, message, { resume = false } = {}) {
         const item = payload.item;
         if (item?.type === "agent_message" && item.text) {
           noteAgentMessage(session, item.text);
-          addEvent(session, { type: "agent_message", text: item.text });
+          const display = stripHandoffBlock(item.text);
+          if (display) addEvent(session, { type: "agent_message", text: display });
         } else if (item?.type === "reasoning") {
           const rtext = item.text
             || (Array.isArray(item.summary) ? item.summary.map((x) => x?.text || x).join(" ") : item.summary)
@@ -2853,7 +2944,8 @@ function spawnClaudeCode(session, message, { resume = false } = {}) {
   function flushDelta() {
     if (deltaState.text.trim()) {
       noteAgentMessage(session, deltaState.text);
-      addEvent(session, { type: "claude", kind: "message", text: deltaState.text, messageId: deltaState.messageId });
+      const display = stripHandoffBlock(deltaState.text);
+      if (display) addEvent(session, { type: "claude", kind: "message", text: display, messageId: deltaState.messageId });
     }
     deltaState.text = "";
     deltaState.messageId = null;
@@ -2967,7 +3059,8 @@ function handleClaudeLine(session, payload, deltaState, flushDelta) {
       } else if (block.type === "text" && block.text) {
         // Non-streaming text (rare with --include-partial-messages but possible)
         noteAgentMessage(session, block.text);
-        addEvent(session, { type: "claude", kind: "message", text: block.text });
+        const display = stripHandoffBlock(block.text);
+        if (display) addEvent(session, { type: "claude", kind: "message", text: display });
       }
     }
     return;

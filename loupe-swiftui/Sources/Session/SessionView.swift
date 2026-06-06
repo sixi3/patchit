@@ -7,6 +7,16 @@ struct SessionView: View {
     let pairing: Pairing
     @State private var reviewRef: SessionStore.PRRef?
     @State private var blocks: [TranscriptBlock] = []
+    @State private var openFacet: HandoffFacet?
+
+    /// Condensed "receipt" derived from the finished run — drives the bento dock.
+    private var summary: HandoffSummary { HandoffSummary(store: store) }
+
+    /// Show the sticky handoff dock once the run settles with a real handoff.
+    private var showDock: Bool {
+        if case .completed = store.phase { return summary.isPresent }
+        return false
+    }
 
     var body: some View {
         ZStack {
@@ -19,12 +29,36 @@ struct SessionView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { sessionToolbar }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if showDock {
+                HandoffDock(
+                    summary: summary,
+                    canReview: store.prRef != nil,
+                    openFacet: $openFacet,
+                    onReview: { if let ref = store.prRef { reviewRef = ref } }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.snappy(duration: 0.28), value: showDock)
         // The session is started ONCE by SessionsStore on dispatch and keeps
         // streaming in the background. Opening this view only displays it —
         // it must not re-dispatch or tear down the stream.
         .fullScreenCover(item: $reviewRef) { ref in
             PRReviewView(store: PRReviewStore(ref: ref, pairing: pairing))
         }
+        .sheet(item: $openFacet) { facet in
+            HandoffDrawer(
+                facet: facet,
+                summary: summary,
+                canReview: store.prRef != nil,
+                onReview: {
+                    openFacet = nil
+                    if let ref = store.prRef { reviewRef = ref }
+                }
+            )
+        }
+        .modifier(PreviewFacetOpener(openFacet: $openFacet))
     }
 
     @ToolbarContentBuilder
@@ -108,8 +142,8 @@ struct SessionView: View {
                 statusPill("Agent is working…", system: "gearshape.2.fill", tint: .accent)
             }
         case .completed(let success):
-            if success, store.prRef != nil, hasHandoff {
-                EmptyView()
+            if summary.isPresent {
+                EmptyView()   // the sticky HandoffDock carries the handoff + CTA
             } else if success, let ref = store.prRef {
                 footerSurface {
                     Button { reviewRef = ref } label: {
@@ -140,10 +174,6 @@ struct SessionView: View {
             .background(Color.surface)
     }
 
-    private var hasHandoff: Bool {
-        blocks.contains { $0.kind == .handoff }
-    }
-
     private func statusPill(_ text: String, system: String, tint: Color) -> some View {
         HStack(spacing: 8) {
             Image(systemName: system).foregroundStyle(tint)
@@ -156,6 +186,26 @@ struct SessionView: View {
     }
 }
 
+// MARK: - Preview facet opener
+// DEBUG-only: `-LoupePreviewFacet <facet>` auto-opens a handoff drawer so the
+// bento drawers can be screenshotted deterministically. No-op in release.
+private struct PreviewFacetOpener: ViewModifier {
+    @Binding var openFacet: HandoffFacet?
+
+    func body(content: Content) -> some View {
+        #if DEBUG
+        content.onAppear {
+            guard let index = CommandLine.arguments.firstIndex(of: "-LoupePreviewFacet"),
+                  index + 1 < CommandLine.arguments.count,
+                  let facet = HandoffFacet(rawValue: CommandLine.arguments[index + 1]) else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { openFacet = facet }
+        }
+        #else
+        content
+        #endif
+    }
+}
+
 // MARK: - Event classification
 private extension SessionEvent {
     enum Category { case message, error, milestone, handoff, fileChange, activity, runner, hidden }
@@ -163,6 +213,7 @@ private extension SessionEvent {
     var category: Category {
         switch type {
         case "agent_message":        return .message
+        case "file_change":          return .fileChange
         case "claude":
             switch kind {
             case "message":     return .message
@@ -222,7 +273,19 @@ private extension SessionEvent {
         return textPath?.contains("/") == true || textPath?.contains(".") == true ? textPath : nil
     }
 
+    var isFileChangeEvent: Bool {
+        if type == "file_change" { return true }
+        if type == "claude", kind == "file_change" { return true }
+        if type == "action", tool == "edit" { return true }
+        return false
+    }
+
+    var isAuthoritativeFileChange: Bool {
+        type == "file_change" && kind == "git_diff"
+    }
+
     var fileStatus: String {
+        if let status, !status.isEmpty { return status }
         if let changeKind, changeKind == "write" { return "added" }
         return "modified"
     }
@@ -328,9 +391,8 @@ private struct TranscriptBlockView: View {
                 MilestoneCard(event: block.events.first)
             }
         case .handoff:
-            TimelineItem(icon: "checkmark.seal.fill", tint: .ringHigh, showsConnector: false) {
-                HandoffCard(event: block.events.first, canReview: canReview, onReview: onReview)
-            }
+            // The handoff now lives in the sticky HandoffDock, not inline in the timeline.
+            EmptyView()
         case .fileChanges:
             TimelineItem(icon: "doc.text.fill", tint: .accent, showsConnector: true) {
                 DiffSummaryCard(events: block.events)
@@ -518,166 +580,6 @@ private struct MilestoneCard: View {
     }
 }
 
-private enum HandoffTab: Hashable {
-    case changed
-    case checked
-    case watch
-
-    var title: String {
-        switch self {
-        case .changed: return "Changed"
-        case .checked: return "Checked"
-        case .watch: return "Watch"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .changed: return "folder.fill"
-        case .checked: return "checkmark.circle.fill"
-        case .watch: return "light.beacon.max.fill"
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .changed: return Color(hex: 0xE0A33E)
-        case .checked: return .ringHigh
-        case .watch: return .riskAlert
-        }
-    }
-}
-
-private struct HandoffCard: View {
-    let event: SessionEvent?
-    let canReview: Bool
-    let onReview: () -> Void
-    @State private var selectedTab: HandoffTab = .changed
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            if let tldr {
-                Text(tldr)
-                    .font(LoupeFont.bodyMedium)
-                    .foregroundStyle(Color.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            handoffTabs
-            handoffPanel
-
-            HStack(spacing: 10) {
-                Button { onReview() } label: {
-                    Text("Review changes")
-                        .font(LoupeFont.button)
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 13)
-                        .background(RoundedRectangle(cornerRadius: LoupeRadius.control).fill(canReview ? Color.accent : Color.textMuted.opacity(0.45)))
-                }
-                .buttonStyle(.plain)
-                .disabled(!canReview)
-            }
-        }
-        .padding(.top, 2)
-    }
-
-    private var handoff: SessionEvent.Handoff? { event?.handoff }
-    private var tldr: String? { handoff?.tldr ?? event?.displayText }
-    private var confidence: Int? {
-        guard let raw = handoff?.confidence else { return nil }
-        let normalized = raw > 1 ? raw : raw * 100
-        return min(100, max(0, Int(normalized.rounded())))
-    }
-    private var changed: [String] {
-        let files = handoff?.filesChanged ?? []
-        return files.isEmpty ? Array((handoff?.whatChanged ?? []).prefix(5)) : files
-    }
-    private var tests: [String] {
-        let run = handoff?.testsRun ?? []
-        return run.isEmpty ? (handoff?.testsNotRun ?? []) : run
-    }
-    private var risks: [String] {
-        Array(((handoff?.risks ?? []) + (handoff?.assumptions ?? [])).prefix(5))
-    }
-
-    private var tabs: [HandoffTab] {
-        var values: [HandoffTab] = []
-        if !changed.isEmpty { values.append(.changed) }
-        if !tests.isEmpty { values.append(.checked) }
-        if !risks.isEmpty { values.append(.watch) }
-        return values.isEmpty ? [.changed] : values
-    }
-
-    private var activeTab: HandoffTab {
-        tabs.contains(selectedTab) ? selectedTab : tabs[0]
-    }
-
-    private var handoffTabs: some View {
-        HStack(spacing: 10) {
-            ForEach(tabs, id: \.self) { tab in
-                Button { withAnimation(.easeInOut(duration: 0.18)) { selectedTab = tab } } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: tab.symbol)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(tab.tint)
-                        Text("\(items(for: tab).count)")
-                            .font(LoupeFont.metric)
-                            .foregroundStyle(activeTab == tab ? Color.textPrimary : Color.textSecondary)
-                    }
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 7)
-                    .background {
-                        if activeTab == tab {
-                            RoundedRectangle(cornerRadius: LoupeRadius.chip).fill(Color.chipFill)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer()
-            if let confidence {
-                Text("\(confidence)%")
-                    .font(LoupeFont.code)
-                    .foregroundStyle(Color.textMuted)
-            }
-        }
-    }
-
-    private var handoffPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(items(for: activeTab).prefix(6).enumerated()), id: \.offset) { _, item in
-                HStack(spacing: 8) {
-                    if activeTab == .changed {
-                        SetiIconView(path: item, size: 18)
-                    } else {
-                        Image(systemName: activeTab.symbol)
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(activeTab.tint)
-                            .frame(width: 18)
-                    }
-                    Text(item)
-                        .font(activeTab == .changed ? LoupeFont.code : LoupeFont.caption)
-                        .foregroundStyle(Color.textPrimary)
-                        .lineLimit(2)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: LoupeRadius.chip).fill(Color.chipFill))
-            }
-        }
-    }
-
-    private func items(for tab: HandoffTab) -> [String] {
-        switch tab {
-        case .changed: return changed
-        case .checked: return tests
-        case .watch: return risks
-        }
-    }
-}
-
 private struct DiffSummaryCard: View {
     let events: [SessionEvent]
 
@@ -711,7 +613,7 @@ private struct DiffSummaryCard: View {
     }
 }
 
-private struct SessionFileChange: Identifiable {
+struct SessionFileChange: Identifiable {
     let path: String
     let status: String
     let additions: Int
@@ -724,8 +626,11 @@ private struct SessionFileChange: Identifiable {
     var hasPatch: Bool { patch?.isEmpty == false }
 
     static func coalesced(from events: [SessionEvent]) -> [SessionFileChange] {
+        let fileEvents = events.filter(\.isFileChangeEvent)
+        let authoritative = fileEvents.filter(\.isAuthoritativeFileChange)
+        let sourceEvents = authoritative.isEmpty ? fileEvents : authoritative
         var byPath: [String: SessionFileChange] = [:]
-        for event in events {
+        for event in sourceEvents {
             guard let path = event.filePath else { continue }
             let existing = byPath[path]
             byPath[path] = SessionFileChange(
@@ -740,7 +645,7 @@ private struct SessionFileChange: Identifiable {
     }
 }
 
-private struct SessionDiffFileRow: View {
+struct SessionDiffFileRow: View {
     let file: SessionFileChange
     @State private var expanded = false
 
@@ -812,7 +717,7 @@ private struct SessionDiffFileRow: View {
     }
 }
 
-private struct SessionDiffText: View {
+struct SessionDiffText: View {
     let patch: String
 
     var body: some View {

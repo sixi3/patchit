@@ -169,6 +169,9 @@ actor LoupeClient {
         do {
             (data, response) = try await session.data(for: req)
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                throw CancellationError()
+            }
             throw LoupeError.transport(error.localizedDescription)
         }
 

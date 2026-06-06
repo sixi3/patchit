@@ -9,15 +9,17 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if store.isPaired {
-                if store.githubConnected {
-                    HomeView(store: store, sessions: sessions)
-                } else {
-                    ConnectGitHubView(store: store)
+            #if DEBUG
+            if CommandLine.arguments.contains("-LoupePreviewHandoff") {
+                NavigationStack {
+                    SessionView(store: .previewHandoff, pairing: .preview)
                 }
             } else {
-                PairingView(store: store)
+                gatedContent
             }
+            #else
+            gatedContent
+            #endif
         }
         .animation(.snappy, value: store.isPaired)
         .animation(.snappy, value: store.githubConnected)
@@ -25,6 +27,19 @@ struct RootView: View {
             if let pairing = store.pairing {
                 await sessions.hydrate(pairing: pairing)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var gatedContent: some View {
+        if store.isPaired {
+            if store.githubConnected {
+                HomeView(store: store, sessions: sessions)
+            } else {
+                ConnectGitHubView(store: store)
+            }
+        } else {
+            PairingView(store: store)
         }
     }
 }
