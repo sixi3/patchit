@@ -6,8 +6,6 @@ struct SessionView: View {
     @State var store: SessionStore
     let pairing: Pairing
     @State private var reviewRef: SessionStore.PRRef?
-    @State private var proseEvents: [SessionEvent] = []
-    @State private var toolsExpanded = false
     @State private var openFacet: HandoffFacet?
 
     /// Condensed "receipt" derived from the finished run — drives the bento dock.
@@ -19,8 +17,8 @@ struct SessionView: View {
         return false
     }
 
-    private var toolEvents: [SessionEvent] {
-        SessionEvent.coalescedToolActivity(from: store.events)
+    private var transcriptItems: [StreamTranscriptItem] {
+        StreamTranscriptItem.build(from: store.events)
     }
 
     var body: some View {
@@ -96,32 +94,24 @@ struct SessionView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
-                    if proseEvents.isEmpty {
+                    if transcriptItems.isEmpty {
                         AgentProsePlaceholder(agent: store.harness, isRunning: store.isRunning)
                             .id("waiting")
                     } else {
-                        ForEach(proseEvents) { event in
-                            AgentProseMessage(agent: store.harness, text: event.displayText)
-                                .id(event.id)
-                        }
-                    }
-
-                    if !toolEvents.isEmpty {
-                        UsedToolAccordion(events: toolEvents, expanded: $toolsExpanded)
-                            .id("used-tools")
+                        AgentTranscript(
+                            agent: store.harness,
+                            items: transcriptItems
+                        )
                     }
                 }
                 .padding(.top, LoupeSpace.xl)
                 .padding(.horizontal, LoupeSpace.xl)
                 .padding(.bottom, showDock ? 120 : LoupeSpace.xxl)
             }
-            .onAppear {
-                proseEvents = store.events.filter(\.isNativeAgentProse)
-            }
             .onChange(of: store.events.count) {
-                let updatedEvents = store.events.filter(\.isNativeAgentProse)
-                proseEvents = updatedEvents
-                if let last = updatedEvents.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+                if let last = transcriptItems.last {
+                    withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
             }
         }
     }
@@ -182,20 +172,21 @@ struct SessionView: View {
     }
 }
 
-private struct AgentProseMessage: View {
+private struct AgentTranscript: View {
     let agent: Agent
-    let text: String
+    let items: [StreamTranscriptItem]
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        VStack(alignment: .leading, spacing: 18) {
             AgentGlyph(agent: agent, size: 28)
                 .padding(.top, 1)
-            Text(text)
-                .font(LoupeFont.bodyMedium)
-                .foregroundStyle(Color.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            LazyVStack(alignment: .leading, spacing: 14) {
+                ForEach(items) { item in
+                    TranscriptEventRow(item: item)
+                        .id(item.id)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -205,7 +196,7 @@ private struct AgentProsePlaceholder: View {
     let isRunning: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        VStack(alignment: .leading, spacing: 18) {
             AgentGlyph(agent: agent, size: 28)
                 .padding(.top, 1)
             Text(isRunning ? "Waiting for \(agent.label)..." : "No agent message was captured.")
@@ -217,59 +208,196 @@ private struct AgentProsePlaceholder: View {
     }
 }
 
-private struct UsedToolAccordion: View {
-    let events: [SessionEvent]
-    @Binding var expanded: Bool
+private struct TranscriptEventRow: View {
+    let item: StreamTranscriptItem
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Button {
-                withAnimation(.snappy(duration: 0.22)) { expanded.toggle() }
-            } label: {
-                HStack(spacing: 9) {
-                    Image(systemName: "wrench.and.screwdriver.fill")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color.accent)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Used Tool")
-                            .font(LoupeFont.bodyMedium)
-                            .foregroundStyle(Color.textPrimary)
-                        Text(summary)
-                            .font(LoupeFont.caption)
-                            .foregroundStyle(Color.textMuted)
-                    }
-                    Spacer(minLength: 8)
+        if item.isProse {
+            Text(item.event.displayText)
+                .font(LoupeFont.bodyMedium)
+                .foregroundStyle(Color.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            InlineToolRow(item: item)
+        }
+    }
+}
+
+private struct InlineToolRow: View {
+    let item: StreamTranscriptItem
+    @State private var expanded = false
+
+    private var canExpand: Bool {
+        item.diffPatch != nil || item.resultSummary != nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if canExpand {
+                Button {
+                    withAnimation(.snappy(duration: 0.2)) { expanded.toggle() }
+                } label: {
+                    header(showsChevron: true, expanded: expanded)
+                }
+                .buttonStyle(.plain)
+
+                if expanded, let patch = item.diffPatch {
+                    SessionDiffText(patch: patch)
+                        .padding(.top, 2)
+                } else if expanded, let summary = item.resultSummary {
+                    Text(summary)
+                        .font(LoupeFont.caption)
+                        .foregroundStyle(Color.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .padding(.top, 1)
+                }
+            } else {
+                header(showsChevron: false, expanded: false)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: LoupeRadius.chip).fill(Color.chipFill))
+    }
+
+    @ViewBuilder
+    private func header(showsChevron: Bool, expanded: Bool) -> some View {
+        if item.isEdit {
+            editHeader(showsChevron: showsChevron, expanded: expanded)
+        } else {
+            standardHeader(showsChevron: showsChevron, expanded: expanded)
+        }
+    }
+
+    private func standardHeader(showsChevron: Bool, expanded: Bool) -> some View {
+        HStack(alignment: .center, spacing: 9) {
+            Image(systemName: item.event.actionPillIcon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(item.event.actionPillTint)
+                .frame(width: 18, height: 20)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.event.accordionTitle)
+                    .font(LoupeFont.body)
+                    .foregroundStyle(Color.textSecondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Color.textMuted)
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func editHeader(showsChevron: Bool, expanded: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .center, spacing: 8) {
+                Image(systemName: item.event.actionPillIcon)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(item.event.actionPillTint)
+                    .frame(width: 18, height: 20)
+                Text("Edited")
+                    .font(LoupeFont.body)
+                    .foregroundStyle(Color.textSecondary)
+                    .lineLimit(1)
+                if let path = item.editFilePath {
+                    SetiIconView(path: path, size: 17)
+                }
+                Text(item.editFileName)
+                    .font(LoupeFont.bodyMedium)
+                    .foregroundStyle(Color.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                editStats
+                if showsChevron {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(Color.textMuted)
                         .rotationEffect(.degrees(expanded ? 90 : 0))
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-
-            if expanded {
-                LazyVStack(alignment: .leading, spacing: 7) {
-                    ForEach(events) { event in
-                        ActivityRow(event: event)
-                    }
-                }
-                .padding(.leading, 6)
+            if let summary = item.editSummary {
+                Text(summary)
+                    .font(LoupeFont.caption)
+                    .foregroundStyle(Color.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2)
             }
         }
-        .padding(.top, 2)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
-    private var summary: String {
-        var parts: [String] = []
-        let commandCount = events.filter { $0.isCommandToolEvent }.count
-        let editCount = events.filter { $0.isEditToolEvent }.count
-        let namedToolCount = events.filter { $0.type == "claude" && $0.kind == "tool_use" }.count
-        if commandCount > 0 { parts.append("\(commandCount) command\(commandCount == 1 ? "" : "s")") }
-        if editCount > 0 { parts.append("\(editCount) edit\(editCount == 1 ? "" : "s")") }
-        if namedToolCount > 0 { parts.append("\(namedToolCount) tool\(namedToolCount == 1 ? "" : "s")") }
-        return parts.isEmpty ? "\(events.count) step\(events.count == 1 ? "" : "s")" : parts.joined(separator: ", ")
+    @ViewBuilder
+    private var editStats: some View {
+        if let stats = item.editStats {
+            HStack(spacing: 3) {
+                if stats.additions > 0 {
+                    Text("+\(stats.additions)")
+                        .foregroundStyle(Color.ringHigh)
+                }
+                if stats.deletions > 0 {
+                    Text("-\(stats.deletions)")
+                        .foregroundStyle(Color.riskAlert)
+                }
+            }
+            .font(LoupeFont.bodyMedium)
+            .lineLimit(1)
+        }
+    }
+}
+
+private struct StreamTranscriptItem: Identifiable {
+    let id: Int
+    let event: SessionEvent
+    var result: SessionEvent?
+
+    var isProse: Bool { event.isTranscriptProse }
+    var isEdit: Bool { event.isTranscriptEditAction }
+    var editSummary: String? { event.editSummaryText(result: result) }
+    var editFileName: String { event.editFileName }
+    var editFilePath: String? { event.filePath }
+    var editStats: (additions: Int, deletions: Int)? { event.diffStats(result: result) }
+    var resultSummary: String? { result?.resultSummaryText }
+    var diffPatch: String? {
+        if let patch = event.patch, !patch.isEmpty { return patch }
+        if let patch = result?.patch, !patch.isEmpty { return patch }
+        return nil
+    }
+
+    static func build(from events: [SessionEvent]) -> [StreamTranscriptItem] {
+        var seenProse = Set<String>()
+        var items: [StreamTranscriptItem] = []
+
+        func attach(_ result: SessionEvent) {
+            if let toolUseId = result.toolUseId,
+               let exactIndex = items.lastIndex(where: { $0.event.toolUseId == toolUseId }) {
+                items[exactIndex].result = result
+                return
+            }
+            if let lastToolIndex = items.indices.reversed().first(where: { !items[$0].isProse && items[$0].result == nil }) {
+                items[lastToolIndex].result = result
+            }
+        }
+
+        for event in events {
+            if event.isTranscriptProse {
+                let key = event.displayText.normalizedTranscriptText
+                guard seenProse.insert(key).inserted else { continue }
+                items.append(StreamTranscriptItem(id: event.id, event: event))
+            } else if event.isTranscriptToolResult {
+                attach(event)
+            } else if event.isTranscriptToolCall {
+                items.append(StreamTranscriptItem(id: event.id, event: event))
+            }
+        }
+        return items
     }
 }
 
@@ -302,6 +430,163 @@ private extension SessionEvent {
         if type == "agent_message" { return true }
         if type == "claude", kind == "message" { return true }
         return false
+    }
+
+    var isTranscriptProse: Bool {
+        isNativeAgentProse || type == "thinking"
+    }
+
+    var isTranscriptToolCall: Bool {
+        if type == "error" { return true }
+        if type == "file_change" { return true }
+        if type == "action" { return true }
+        if type == "claude" {
+            if kind == "tool_use", ["Edit", "MultiEdit", "Write", "NotebookEdit"].contains(toolName ?? "") {
+                return false
+            }
+            return ["tool_use", "file_change", "retry"].contains(kind ?? "")
+        }
+        return false
+    }
+
+    var isTranscriptToolResult: Bool {
+        type == "stdout" || type == "stderr" || (type == "claude" && kind == "tool_result")
+    }
+
+    var isTranscriptEditAction: Bool {
+        if type == "file_change" { return true }
+        if type == "action", tool == "edit" { return true }
+        if type == "claude", kind == "file_change" { return true }
+        return false
+    }
+
+    var accordionTitle: String {
+        let title = [actionVerb, actionObject].compactMap(\.self).joined(separator: " ")
+        return title.isEmpty ? accordionVerb : title
+    }
+
+    func editSummaryText(result: SessionEvent?) -> String? {
+        guard isTranscriptEditAction else { return nil }
+        guard let stats = diffStats(result: result) else { return "Updated \(editFileName)." }
+        if stats.additions > 0, stats.deletions > 0 {
+            return "Updated \(editFileName) with \(stats.additions) added and \(stats.deletions) removed line\(stats.deletions == 1 ? "" : "s")."
+        }
+        if stats.additions > 0 {
+            return "Added \(stats.additions) line\(stats.additions == 1 ? "" : "s") to \(editFileName)."
+        }
+        if stats.deletions > 0 {
+            return "Removed \(stats.deletions) line\(stats.deletions == 1 ? "" : "s") from \(editFileName)."
+        }
+        return "Updated \(editFileName)."
+    }
+
+    var resultSummaryText: String? {
+        if isError == true { return detailText.compactTranscriptResult }
+        if let output, !output.isEmpty { return output.compactTranscriptResult }
+        if let text, !text.isEmpty { return text.stripToolNamePrefix(toolName).compactTranscriptResult }
+        return nil
+    }
+
+    var actionPillIcon: String {
+        if type == "error" { return "exclamationmark.octagon.fill" }
+        if type == "action", tool == "shell" { return "terminal" }
+        if isTranscriptEditAction { return "pencil" }
+        if type == "claude", kind == "retry" { return "arrow.clockwise" }
+        if type == "claude", kind == "tool_use" {
+            switch toolName {
+            case "Read": return "doc.text.magnifyingglass"
+            case "Grep", "Glob": return "magnifyingglass"
+            case "Bash": return "terminal"
+            default: return "wrench.and.screwdriver.fill"
+            }
+        }
+        return "circle.fill"
+    }
+
+    var actionPillTint: Color {
+        if type == "error" || isError == true { return .riskAlert }
+        return .accent
+    }
+
+    private var accordionVerb: String {
+        actionVerb
+    }
+
+    private var actionVerb: String {
+        if type == "error" { return "Error" }
+        if type == "file_change" { return "Edited" }
+        if type == "action", tool == "shell" { return shellActionTitle.verb }
+        if type == "action", tool == "edit" { return "Edited" }
+        if type == "claude", kind == "file_change" { return "Edited" }
+        if type == "claude", kind == "retry" { return "Retrying" }
+        if type == "claude", kind == "tool_use" {
+            switch toolName {
+            case "Read": return "Read"
+            case "Grep": return "Searched"
+            case "Glob": return "Found"
+            case "Bash": return shellActionTitle.verb
+            case "Edit", "MultiEdit", "Write", "NotebookEdit": return "Edited"
+            case let name?: return name
+            case nil: return "Used tool"
+            }
+        }
+        return actionTitle
+    }
+
+    private var accordionObject: String? {
+        actionObject
+    }
+
+    private var actionObject: String? {
+        if type == "action", tool == "shell" { return shellActionTitle.object }
+        if let filePath { return filePath.condensedPathDisplay }
+        if type == "claude", kind == "tool_use", let toolName {
+            switch toolName {
+            case "Read", "Edit", "MultiEdit", "Write", "NotebookEdit":
+                return toolInputPath?.condensedPathDisplay
+            case "Grep", "Glob":
+                return toolInputPattern ?? toolInputPath?.condensedPathDisplay
+            case "Bash":
+                return shellActionTitle.object
+            default:
+                return toolInputSummary
+            }
+        }
+        return toolInputSummary
+    }
+
+    var editFileName: String {
+        filePath.map { ($0 as NSString).lastPathComponent } ?? "file"
+    }
+
+    func diffStats(result: SessionEvent?) -> (additions: Int, deletions: Int)? {
+        let patchStats = (patch ?? result?.patch).diffLineStats
+        let added = additions ?? patchStats.additions
+        let removed = deletions ?? patchStats.deletions
+        guard added != 0 || removed != 0 else { return nil }
+        return (added, removed)
+    }
+
+    private var shellActionTitle: (verb: String, object: String?) {
+        let command = (input ?? text ?? "").stripToolNamePrefix(toolName).stripCommandPrefix.lowercased()
+        if command.contains("xcodebuild") {
+            if command.contains("-list") { return ("Checked", "Xcode schemes") }
+            if command.contains("build") { return ("Ran", "build") }
+            return ("Checked", "Xcode")
+        }
+        if command.contains("grep") || command.contains("rg ") {
+            return ("Searched", nil)
+        }
+        if command.contains("git status") { return ("Checked", "git status") }
+        if command.contains("git diff") { return ("Checked", "diff") }
+        if command.contains("git log") { return ("Checked", "git history") }
+        if command.contains("npm test") || command.contains("pnpm test") || command.contains("yarn test") {
+            return ("Ran", "tests")
+        }
+        if command.contains("npm run") || command.contains("pnpm ") || command.contains("yarn ") {
+            return ("Ran", "script")
+        }
+        return ("Ran", "command")
     }
 
     var isToolActivity: Bool {
@@ -431,6 +716,89 @@ private extension SessionEvent {
         case let name?: return name
         case nil: return "Used tool"
         }
+    }
+
+    private var toolInputSummary: String? {
+        if let input, !input.isEmpty { return input.stripCommandPrefix }
+        if let text, !text.isEmpty { return text.stripToolNamePrefix(toolName) }
+        return nil
+    }
+
+    private var toolInputPath: String? {
+        let source = input ?? text ?? ""
+        let candidates = source.split(whereSeparator: { $0.isWhitespace || $0 == "\"" || $0 == "'" || $0 == "," || $0 == ":" })
+            .map(String.init)
+        return candidates.first { $0.contains("/") || $0.contains(".swift") || $0.contains(".js") || $0.contains(".ts") || $0.contains(".tsx") }
+    }
+
+    private var toolInputPattern: String? {
+        let source = (input ?? text ?? "").stripToolNamePrefix(toolName)
+        if source.isEmpty { return nil }
+        if let path = toolInputPath {
+            return source.replacingOccurrences(of: path, with: "").trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        }
+        return source.nilIfEmpty
+    }
+
+}
+
+private extension String {
+    var normalizedTranscriptText: String {
+        trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+    }
+
+    var stripCommandPrefix: String {
+        if hasPrefix("$ ") { return String(dropFirst(2)) }
+        return self
+    }
+
+    func stripToolNamePrefix(_ toolName: String?) -> String {
+        guard let toolName, hasPrefix("\(toolName):") else { return self }
+        return String(dropFirst(toolName.count + 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
+    }
+
+    var condensedPathDisplay: String {
+        let home = NSHomeDirectory()
+        var value = replacingOccurrences(of: home, with: "~")
+        let parts = value.split(separator: "/", omittingEmptySubsequences: false)
+        if parts.count > 4 {
+            value = [parts[0], "...", parts[parts.count - 2], parts[parts.count - 1]]
+                .map(String.init)
+                .joined(separator: "/")
+        }
+        return value
+    }
+
+    var compactTranscriptResult: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed == "(Bash completed with no output)" { return "Completed with no output." }
+        let lines = trimmed
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard let first = lines.first else { return nil }
+        let suffix = lines.count > 1 ? " + \(lines.count - 1) more line\(lines.count == 2 ? "" : "s")" : ""
+        return String(first.prefix(180)) + suffix
+    }
+}
+
+private extension Optional where Wrapped == String {
+    var diffLineStats: (additions: Int, deletions: Int) {
+        guard let self, !self.isEmpty else { return (0, 0) }
+        var additions = 0
+        var deletions = 0
+        for line in self.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("+++") || line.hasPrefix("---") { continue }
+            if line.hasPrefix("+") { additions += 1 }
+            if line.hasPrefix("-") { deletions += 1 }
+        }
+        return (additions, deletions)
     }
 }
 

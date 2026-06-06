@@ -121,6 +121,7 @@ struct SessionEvent: Decodable, Identifiable {
     let compareUrl: String?
     let tool: String?
     let toolName: String?
+    let toolUseId: String?
     let path: String?
     let input: String?
     let output: String?
