@@ -62,8 +62,12 @@ final class InboxStore {
         let client = LoupeClient(pairing: pairing)
         do {
             // Health first to confirm reachability + workstation identity.
-            if let health = try? await client.health(), let cwd = health.cwd {
-                workstation = (cwd as NSString).lastPathComponent
+            if let health = try? await client.health() {
+                if let hostname = health.hostname {
+                    workstation = hostname
+                } else if let cwd = health.cwd {
+                    workstation = (cwd as NSString).lastPathComponent
+                }
             }
             try Task.checkCancellation()
             let payload = try await client.inbox()

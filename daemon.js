@@ -3345,6 +3345,7 @@ const server = http.createServer(async (req, res) => {
       claudeBin: CLAUDE_BIN,
       harnesses: harnessRegistry,
       defaultHarness: defaultHarnessId(),
+      hostname: os.hostname(),
       cwd: ROOT,
       sessions: sessions.size,
       urls: getNetworkUrls(),
