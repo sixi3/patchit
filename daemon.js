@@ -26,6 +26,47 @@ const GITHUB_OAUTH_CLIENT_ID = process.env.GITHUB_OAUTH_CLIENT_ID || "";
 const GITHUB_OAUTH_SCOPES = process.env.GITHUB_OAUTH_SCOPES || "repo read:user";
 const ENABLE_TUNNEL = process.argv.includes("--tunnel") || process.env.LOUPE_TUNNEL === "1";
 
+// Appended to the initial dispatch so the agent's output has two channels:
+// (1) short plain-sentence narration as it works (the chat stream), and
+// (2) one fenced HANDOFF JSON block at the very end (the condensed handoff).
+// Keys mirror normalizeHandoff() so tryExtractHandoff() captures it verbatim.
+const HANDOFF_CONTRACT = `
+---
+Output protocol (follow exactly):
+
+While you work, narrate in short plain sentences — one line per meaningful step (e.g. "Spinning up a branch.", "Found the toolbar button in HomeView.swift.", "Running the build."). Keep shell commands, raw output, and tool noise out of the narration.
+
+When you are completely finished, end your FINAL message with a single fenced JSON block tagged HANDOFF, and nothing after it:
+
+\`\`\`json
+{
+  "tldr": "<one sentence: what you changed and why>",
+  "what_changed": ["<short bullet>", "..."],
+  "files_changed": ["<path>", "..."],
+  "tests_run": ["<check that passed, e.g. 'xcodebuild succeeded'>", "..."],
+  "tests_not_run": ["<relevant check you did not run>", "..."],
+  "assumptions": ["<assumption a reviewer should verify>", "..."],
+  "risks": ["<low-confidence area or risk>", "..."],
+  "confidence": 0.0
+}
+\`\`\`
+
+Use [] for empty lists and a 0–1 number for confidence. Emit the HANDOFF block only once, in the final message.`;
+
+function withHandoffContract(message) {
+  return `${String(message || "").trim()}\n${HANDOFF_CONTRACT}`;
+}
+
+// The handoff JSON rides inside the agent's final message. tryExtractHandoff()
+// still needs the raw text, but the chat bubble must not show the JSON — strip
+// the fenced handoff block (identified by its "tldr" key) for display only.
+function stripHandoffBlock(text) {
+  return String(text || "")
+    .replace(/```(?:json)?\s*\{[\s\S]*?"tldr"[\s\S]*?\}\s*```/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 const sessions = new Map();
 const plans = new Map();
 const recentRequests = [];
@@ -428,6 +469,10 @@ function githubApiRequest(method, pathname, token, payload = null) {
   });
 }
 
+function githubGraphqlRequest(token, query, variables = {}) {
+  return githubApiRequest("POST", "/graphql", token, { query, variables });
+}
+
 function githubOAuthPost(pathname, params) {
   const body = new URLSearchParams(params).toString();
   return new Promise((resolve, reject) => {
@@ -789,11 +834,38 @@ async function mergePullRequest(owner, repo, number, { commitTitle, commitMessag
     throw error;
   }
   const safe = parseRepoPair(owner, repo);
-  return githubApiRequest("PUT", `/repos/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.repo)}/pulls/${Number(number)}/merge`, token, {
+  const repoPath = `/repos/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.repo)}`;
+  const prNumber = Number(number);
+  const pr = await githubApiRequest("GET", `${repoPath}/pulls/${prNumber}`, token);
+  if (pr.draft) {
+    await markPullRequestReadyForReview(token, pr.node_id);
+  }
+  return githubApiRequest("PUT", `${repoPath}/pulls/${prNumber}/merge`, token, {
     merge_method: "squash",
     ...(commitTitle ? { commit_title: commitTitle } : {}),
     ...(commitMessage ? { commit_message: commitMessage } : {})
   });
+}
+
+async function markPullRequestReadyForReview(token, pullRequestId) {
+  if (!pullRequestId) {
+    const error = new Error("GitHub did not return a pull request id.");
+    error.statusCode = 502;
+    throw error;
+  }
+  const result = await githubGraphqlRequest(token, `
+    mutation MarkPullRequestReadyForReview($id: ID!) {
+      markPullRequestReadyForReview(input: { pullRequestId: $id }) {
+        pullRequest { number isDraft url }
+      }
+    }
+  `, { id: pullRequestId });
+  if (Array.isArray(result.errors) && result.errors.length) {
+    const error = new Error(result.errors.map((item) => item.message).filter(Boolean).join("; ") || "GitHub could not mark the pull request ready for review.");
+    error.statusCode = 422;
+    throw error;
+  }
+  return result.data?.markPullRequestReadyForReview?.pullRequest || null;
 }
 
 async function closePullRequest(owner, repo, number) {
@@ -856,12 +928,12 @@ function getPrimaryPairingUrl() {
 // optional: enabled with LOUPE_TUNNEL=1. No-op (logs a hint) if cloudflared is
 // not installed. Does NOT change the auth model — the same pair token is used.
 function startTunnel() {
-  if (!ENABLE_TUNNEL) return;
+  if (!ENABLE_TUNNEL) return false;
   const probe = spawnSync("cloudflared", ["--version"], { encoding: "utf8" });
   if (probe.status !== 0) {
     console.log("--tunnel set but `cloudflared` is not installed.");
     console.log("  Install with: brew install cloudflared");
-    return;
+    return false;
   }
   const child = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${PORT}`], {
     stdio: ["ignore", "pipe", "pipe"]
@@ -883,6 +955,7 @@ function startTunnel() {
     tunnelUrl = null;
   });
   process.on("exit", () => child.kill());
+  return true;
 }
 
 // Render a QR code in the terminal. Uses the `qrencode` CLI if available
@@ -1180,8 +1253,11 @@ function spawnSessionTurn(session, message, { resume = false } = {}) {
     text: `${resume ? "Resuming" : "Starting"} ${harness.label} on this Mac...`
   });
 
+  // Resume turns already carry the contract from the first turn's context; only
+  // the initial dispatch needs the handoff protocol appended to what the agent sees.
+  const agentInput = resume ? message : withHandoffContract(message);
   const spawner = session.harnessId === "claude-code" ? spawnClaudeCode : spawnCodex;
-  const child = spawner(session, message, { resume });
+  const child = spawner(session, agentInput, { resume });
   session.child = child;
 
   child.on("error", (error) => {
@@ -1345,12 +1421,46 @@ function noteAgentMessage(session, text) {
 }
 
 function changedFilesFromCachedDiff(cwd) {
-  const result = gitRun(cwd, ["diff", "--cached", "--name-status"]);
-  if (result.status !== 0) return [];
-  return result.stdout
+  return changedFileStatsFromCachedDiff(cwd).map((file) => file.path);
+}
+
+function changedFileStatsFromCachedDiff(cwd) {
+  const numstat = gitRun(cwd, ["diff", "--cached", "--numstat"]);
+  if (numstat.status !== 0) return [];
+
+  const status = gitRun(cwd, ["diff", "--cached", "--name-status"]);
+  const statuses = new Map();
+  if (status.status === 0) {
+    for (const line of status.stdout.split(/\r?\n/)) {
+      const parts = line.trim().split(/\s+/).filter(Boolean);
+      if (parts.length >= 2) {
+        statuses.set(parts[parts.length - 1], parts[0]);
+      }
+    }
+  }
+
+  return numstat.stdout
     .split(/\r?\n/)
-    .map((line) => line.trim().split(/\s+/).slice(-1)[0])
+    .map((line) => {
+      const parts = line.trim().split(/\t/);
+      if (parts.length < 3) return null;
+      const [added, removed, path] = parts;
+      return {
+        path,
+        status: gitStatusKind(statuses.get(path)),
+        additions: Number.isFinite(Number(added)) ? Number(added) : 0,
+        deletions: Number.isFinite(Number(removed)) ? Number(removed) : 0
+      };
+    })
     .filter(Boolean);
+}
+
+function gitStatusKind(status) {
+  if (!status) return "modified";
+  if (status.startsWith("A")) return "added";
+  if (status.startsWith("D")) return "removed";
+  if (status.startsWith("R")) return "renamed";
+  return "modified";
 }
 
 function buildSessionHandoff(session, changedFiles) {
@@ -2590,10 +2700,22 @@ async function finalizeBranch(session) {
     gitRun(cwd, ["branch", "-D", branch]);
     return;
   }
-  const changedFiles = changedFilesFromCachedDiff(cwd);
+  const changedFileStats = changedFileStatsFromCachedDiff(cwd);
+  const changedFiles = changedFileStats.map((file) => file.path);
   const handoff = buildSessionHandoff(session, changedFiles);
   const deviation = compareBlueprintHandoff(session.dispatch?.plan, changedFiles, handoff);
   session.deviation = deviation;
+  for (const file of changedFileStats) {
+    addEvent(session, {
+      type: "file_change",
+      kind: "git_diff",
+      path: file.path,
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+      text: `Changed ${file.path}`
+    });
+  }
   addEvent(session, { type: "handoff", kind: "ready", handoff });
   addEvent(session, { type: "deviations_computed", deviation });
 
@@ -2730,7 +2852,8 @@ function spawnCodex(session, message, { resume = false } = {}) {
         const item = payload.item;
         if (item?.type === "agent_message" && item.text) {
           noteAgentMessage(session, item.text);
-          addEvent(session, { type: "agent_message", text: item.text });
+          const display = stripHandoffBlock(item.text);
+          if (display) addEvent(session, { type: "agent_message", text: display });
         } else if (item?.type === "reasoning") {
           const rtext = item.text
             || (Array.isArray(item.summary) ? item.summary.map((x) => x?.text || x).join(" ") : item.summary)
@@ -2740,8 +2863,23 @@ function spawnCodex(session, message, { resume = false } = {}) {
           const cmd = item.command || item.parsed_cmd || "";
           addEvent(session, { type: "action", tool: "shell", text: cmd ? `$ ${cmd}` : "Ran a command" });
         } else if (item?.type === "file_change" || item?.type === "patch_apply") {
-          const path = item.path || (Array.isArray(item.changes) && item.changes[0]?.path) || "";
-          addEvent(session, { type: "action", tool: "edit", text: path ? `Edited ${path}` : "Edited files" });
+          const changes = normalizeCodexFileChanges(item);
+          if (changes.length) {
+            for (const change of changes) {
+              addEvent(session, {
+                type: "action",
+                tool: "edit",
+                path: change.path,
+                status: change.status,
+                additions: change.additions,
+                deletions: change.deletions,
+                patch: change.patch,
+                text: change.path ? `Edited ${change.path}` : "Edited files"
+              });
+            }
+          } else {
+            addEvent(session, { type: "action", tool: "edit", text: "Edited files" });
+          }
         } else if (item?.type === "error" && item.text) {
           addEvent(session, { type: "error", text: item.text });
         } else if (item?.type) {
@@ -2806,7 +2944,8 @@ function spawnClaudeCode(session, message, { resume = false } = {}) {
   function flushDelta() {
     if (deltaState.text.trim()) {
       noteAgentMessage(session, deltaState.text);
-      addEvent(session, { type: "claude", kind: "message", text: deltaState.text, messageId: deltaState.messageId });
+      const display = stripHandoffBlock(deltaState.text);
+      if (display) addEvent(session, { type: "claude", kind: "message", text: display, messageId: deltaState.messageId });
     }
     deltaState.text = "";
     deltaState.messageId = null;
@@ -2904,18 +3043,24 @@ function handleClaudeLine(session, payload, deltaState, flushDelta) {
         // Surface Edit/Write/MultiEdit as file changes too so they show up in the files tab.
         const filePath = block.input?.file_path || block.input?.path;
         if (filePath && ["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(block.name)) {
+          const diffPreview = toolInputDiffPreview(block.name, block.input);
           addEvent(session, {
             type: "claude",
             kind: "file_change",
             path: filePath,
             changeKind: block.name.toLowerCase(),
+            status: block.name === "Write" ? "added" : "modified",
+            additions: diffPreview.additions,
+            deletions: diffPreview.deletions,
+            patch: diffPreview.patch,
             text: `Edited ${filePath}`
           });
         }
       } else if (block.type === "text" && block.text) {
         // Non-streaming text (rare with --include-partial-messages but possible)
         noteAgentMessage(session, block.text);
-        addEvent(session, { type: "claude", kind: "message", text: block.text });
+        const display = stripHandoffBlock(block.text);
+        if (display) addEvent(session, { type: "claude", kind: "message", text: display });
       }
     }
     return;
@@ -2979,6 +3124,91 @@ function previewToolInput(toolName, input) {
   } catch {
     return String(input);
   }
+}
+
+function toolInputDiffPreview(toolName, input) {
+  const empty = { additions: 0, deletions: 0, patch: "" };
+  if (!input) return empty;
+
+  const trimLines = (value) => String(value || "").split(/\r?\n/).slice(0, 12);
+  const summarize = (removed, added) => {
+    const oldLines = trimLines(removed);
+    const newLines = trimLines(added);
+    const patch = [
+      "@@ preview @@",
+      ...oldLines.map((line) => `-${line}`),
+      ...newLines.map((line) => `+${line}`)
+    ].join("\n");
+    return {
+      additions: newLines.filter(Boolean).length,
+      deletions: oldLines.filter(Boolean).length,
+      patch
+    };
+  };
+
+  if (toolName === "Edit") {
+    return summarize(input.old_string, input.new_string);
+  }
+
+  if (toolName === "MultiEdit" && Array.isArray(input.edits)) {
+    const additions = input.edits.reduce((sum, edit) => sum + trimLines(edit.new_string).filter(Boolean).length, 0);
+    const deletions = input.edits.reduce((sum, edit) => sum + trimLines(edit.old_string).filter(Boolean).length, 0);
+    const patch = input.edits.slice(0, 3).flatMap((edit, index) => {
+      const preview = summarize(edit.old_string, edit.new_string).patch;
+      return [`@@ edit ${index + 1} @@`, ...preview.split(/\r?\n/).slice(1)];
+    }).join("\n");
+    return { additions, deletions, patch };
+  }
+
+  if (toolName === "Write" && input.content) {
+    const lines = trimLines(input.content);
+    return {
+      additions: lines.filter(Boolean).length,
+      deletions: 0,
+      patch: ["@@ new file preview @@", ...lines.map((line) => `+${line}`)].join("\n")
+    };
+  }
+
+  return empty;
+}
+
+function normalizeCodexFileChanges(item) {
+  const rawChanges = Array.isArray(item?.changes) && item.changes.length
+    ? item.changes
+    : [{ ...item, path: item?.path || item?.file || item?.filename }];
+
+  return rawChanges.map((change) => {
+    const path = change.path || change.file || change.filename || "";
+    const patch = String(change.patch || change.diff || change.unified_diff || "");
+    const stats = diffStats(patch);
+    return {
+      path,
+      status: change.status || change.change_type || change.kind || (item?.type === "patch_apply" ? "modified" : "modified"),
+      additions: numberOr(stats.additions, change.additions, change.added),
+      deletions: numberOr(stats.deletions, change.deletions, change.removed),
+      patch: patch.slice(0, 4000)
+    };
+  }).filter((change) => change.path || change.patch);
+}
+
+function diffStats(patch) {
+  if (!patch) return { additions: 0, deletions: 0 };
+  let additions = 0;
+  let deletions = 0;
+  for (const line of patch.split(/\r?\n/)) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) additions += 1;
+    if (line.startsWith("-")) deletions += 1;
+  }
+  return { additions, deletions };
+}
+
+function numberOr(...values) {
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return 0;
 }
 
 function serveStatic(req, res) {
@@ -3549,11 +3779,16 @@ function startServer() {
     for (const url of getPairingUrls()) {
       console.log(`  ${url}`);
     }
-    // Scan-to-pair QR for the LAN URL immediately; the tunnel prints its own
-    // QR once it connects.
-    console.log("\nScan to pair this phone:");
-    renderQr(getPrimaryPairingUrl());
-    startTunnel();
+    if (ENABLE_TUNNEL) {
+      console.log("\nTunnel mode enabled. Waiting for the public tunnel QR before phone pairing...");
+      if (!startTunnel()) {
+        console.log("\nTunnel unavailable. Scan this LAN QR only if the phone can reach this Mac on the same local network:");
+        renderQr(getPrimaryPairingUrl());
+      }
+    } else {
+      console.log("\nScan to pair this phone:");
+      renderQr(getPrimaryPairingUrl());
+    }
   });
 }
 

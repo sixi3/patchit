@@ -56,6 +56,7 @@ final class InboxStore {
 
     func refresh() async {
         guard let pairing else { phase = .unpaired; return }
+        let previousPhase = phase
         phase = .loading
         let client = LoupeClient(pairing: pairing)
         do {
@@ -63,6 +64,7 @@ final class InboxStore {
             if let health = try? await client.health(), let cwd = health.cwd {
                 workstation = (cwd as NSString).lastPathComponent
             }
+            try Task.checkCancellation()
             let payload = try await client.inbox()
             items = payload.assigned.map { $0.toInboxItem() }
             prs = payload.reviews.compactMap { t in
@@ -80,6 +82,8 @@ final class InboxStore {
             githubConnected = false
             items = []
             phase = .idle   // RootView will route to ConnectGitHubView
+        } catch is CancellationError {
+            phase = previousPhase == .loading ? (items.isEmpty ? .idle : .loaded) : previousPhase
         } catch {
             phase = .failed((error as? LocalizedError)?.errorDescription ?? "\(error)")
         }

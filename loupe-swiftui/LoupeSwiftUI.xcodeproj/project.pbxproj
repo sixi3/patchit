@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0760C3D9D1C9A06C952E59F8 /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B14AC3824481DBA69409424 /* SessionStore.swift */; };
 		07F1F5D75E2761DFC779ECB3 /* DaemonModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 420363FB7913DCEA3F7C8AF8 /* DaemonModels.swift */; };
+		0DA0E25154BDC2BC88A1AA1B /* HandoffDock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05A9935B6AC895F1155D192F /* HandoffDock.swift */; };
 		1E5BECC0BDB652CC6BD77096 /* LoupeFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = F225D8B8621DD3673E2D8920 /* LoupeFont.swift */; };
 		2031612EE11CB3793DB39B6B /* InboxStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09A9E0F843AD9CAFA2E72F93 /* InboxStore.swift */; };
 		2ACF295C7BE51A9B9E2A7EE9 /* ConnectGitHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 770EED573AF2AADB041B0B08 /* ConnectGitHubView.swift */; };
@@ -24,8 +25,11 @@
 		6F0982CCD5FAB572B7697F73 /* SummaryTruncation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C406DF69090A1785B66D09F /* SummaryTruncation.swift */; };
 		742D856DD6226A595FFA90E6 /* seti-associations.json in Resources */ = {isa = PBXBuildFile; fileRef = 9D0F5EF5B621E8259BD4E0B3 /* seti-associations.json */; };
 		74E2C1B73545041A4587EF55 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 967AC80B0A24BD1845B84D07 /* RootView.swift */; };
+		787D8258D1AFA8451C8DF860 /* HandoffPreviewSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFD4A1769E5E97C3539A53B0 /* HandoffPreviewSupport.swift */; };
+		7A8AC73179D327F35B7F9856 /* SessionsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 262F20D9FC315851307A3B70 /* SessionsListView.swift */; };
 		84BD2BC23F8ED2C7CD0FA21F /* SpaceMono-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = D1ED1C3EB71696004AAC8302 /* SpaceMono-Regular.ttf */; };
 		8648C08766F39FCBF15EC7F1 /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB66219C10D7BD35D8AAFD6A /* QRScannerView.swift */; };
+		88B74D3E1CD4D72C21D99C28 /* SessionsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5FFBA72B0360B6611D251AF /* SessionsStore.swift */; };
 		8EA37D7B15AFC01F2A29F5F6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 21E89A612A8173BEE324422D /* Assets.xcassets */; };
 		8FBE4589036A5E324015B91C /* Keychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84B54DE2626630BB38D3FF21 /* Keychain.swift */; };
 		91A9E952C9DE97D733432202 /* LoupeSwiftUIApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7CDF81FFA139932EA4254EA /* LoupeSwiftUIApp.swift */; };
@@ -36,31 +40,33 @@
 		A25BA02F5B7F8A3E71A7DC37 /* ExpandableSummaryText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DC703BB8FCF260EDB4DAA6E /* ExpandableSummaryText.swift */; };
 		A874DF126FBD7EDAF6E5E0E2 /* Pairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8234C1130251F2CF03CC14B2 /* Pairing.swift */; };
 		A9D988AFB47FA7D32E524EA0 /* FamiljenGrotesk-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 5EEA8BA42C6625FBCF3A60C1 /* FamiljenGrotesk-SemiBold.ttf */; };
+		B49C7B2AA4E9600FDE3434E7 /* HandoffDrawer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11F7635045753B2D39BE1237 /* HandoffDrawer.swift */; };
 		B8DBAC0A733DC329E38AF098 /* SpaceMono-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FCA6C527C88E5FE4A4266109 /* SpaceMono-Bold.ttf */; };
 		B99C178F1359A3FA61C7DAB9 /* SessionModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CF24D3C39FD34F27A15871B /* SessionModels.swift */; };
 		BB966507C88FC198D6105A98 /* PRModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7F3B71576C727C3C0EBACC1 /* PRModels.swift */; };
 		C7BBD50D5561AEF0B78A549D /* TicketMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BD659A5AAE29E336B0822DF /* TicketMapping.swift */; };
 		CA91D7BDED9D37B54416F352 /* LoupeLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E2FFAAB6ACC439339FEF02A /* LoupeLayout.swift */; };
 		CF7127E7CEEC79330A28D177 /* LoupePrimitives.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D8C55F2497879F0162316D5 /* LoupePrimitives.swift */; };
-		D2A7292C44281B3933C5DF85 /* SessionsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B127D66A48AB18E14A6FD0D /* SessionsStore.swift */; };
 		D5260A0BA354CBFDFB79BB8F /* Inbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80E1E860055A3678C941B3D9 /* Inbox.swift */; };
 		DB9ECB82F8F40AEB13C75210 /* SampleInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C2F46CFA2F26E57A849FFF8 /* SampleInbox.swift */; };
 		E1F2148C3E4B412841F187E0 /* APIEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78B84E50F57E87414A8100B6 /* APIEnvelope.swift */; };
 		F095B5B5A68613D025ADD390 /* SessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D80FE5A376838AD37C6483A1 /* SessionView.swift */; };
 		F3855E521C00E08D7591E938 /* LoupeClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB753F4CF4535E16F396F6DE /* LoupeClient.swift */; };
 		F5053C3F3B00000F1625A16C /* LoupeGlass.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E663576961837B5D16E0834 /* LoupeGlass.swift */; };
-		F5146E2B6CD6B1A7A58455A0 /* SessionsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77B15788AD19670E8BAD9A79 /* SessionsListView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		05A9935B6AC895F1155D192F /* HandoffDock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffDock.swift; sourceTree = "<group>"; };
 		08E6B8A5D3A84A9D853C12D3 /* PRReviewStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRReviewStore.swift; sourceTree = "<group>"; };
 		09A9E0F843AD9CAFA2E72F93 /* InboxStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxStore.swift; sourceTree = "<group>"; };
 		0C406DF69090A1785B66D09F /* SummaryTruncation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryTruncation.swift; sourceTree = "<group>"; };
 		0DC703BB8FCF260EDB4DAA6E /* ExpandableSummaryText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpandableSummaryText.swift; sourceTree = "<group>"; };
+		11F7635045753B2D39BE1237 /* HandoffDrawer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffDrawer.swift; sourceTree = "<group>"; };
 		176DB1BB6131FEF54534B46A /* InboxComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxComponents.swift; sourceTree = "<group>"; };
 		198E86D28AADB7C806535F35 /* FamiljenGrotesk-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FamiljenGrotesk-Bold.ttf"; sourceTree = "<group>"; };
 		1E2FFAAB6ACC439339FEF02A /* LoupeLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoupeLayout.swift; sourceTree = "<group>"; };
 		21E89A612A8173BEE324422D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		262F20D9FC315851307A3B70 /* SessionsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsListView.swift; sourceTree = "<group>"; };
 		27400B8F785B4F005376C210 /* LoupeColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoupeColor.swift; sourceTree = "<group>"; };
 		2D8C55F2497879F0162316D5 /* LoupePrimitives.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoupePrimitives.swift; sourceTree = "<group>"; };
 		3B14AC3824481DBA69409424 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
@@ -70,7 +76,6 @@
 		5EEA8BA42C6625FBCF3A60C1 /* FamiljenGrotesk-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FamiljenGrotesk-SemiBold.ttf"; sourceTree = "<group>"; };
 		709D711FC37A2D4D4ED3C06E /* FamiljenGrotesk-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FamiljenGrotesk-Regular.ttf"; sourceTree = "<group>"; };
 		770EED573AF2AADB041B0B08 /* ConnectGitHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectGitHubView.swift; sourceTree = "<group>"; };
-		77B15788AD19670E8BAD9A79 /* SessionsListView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionsListView.swift; sourceTree = "<group>"; };
 		78B84E50F57E87414A8100B6 /* APIEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIEnvelope.swift; sourceTree = "<group>"; };
 		7CF24D3C39FD34F27A15871B /* SessionModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionModels.swift; sourceTree = "<group>"; };
 		7E663576961837B5D16E0834 /* LoupeGlass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoupeGlass.swift; sourceTree = "<group>"; };
@@ -78,11 +83,11 @@
 		8234C1130251F2CF03CC14B2 /* Pairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pairing.swift; sourceTree = "<group>"; };
 		84B54DE2626630BB38D3FF21 /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
 		85A1752F2D8A0C9088C54C1C /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
-		8B127D66A48AB18E14A6FD0D /* SessionsStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionsStore.swift; sourceTree = "<group>"; };
 		967AC80B0A24BD1845B84D07 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		9D0F5EF5B621E8259BD4E0B3 /* seti-associations.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "seti-associations.json"; sourceTree = "<group>"; };
 		AA1E9FA70B7AE21433DBF0F3 /* LoupeSwiftUI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LoupeSwiftUI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AB66219C10D7BD35D8AAFD6A /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
+		AFD4A1769E5E97C3539A53B0 /* HandoffPreviewSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffPreviewSupport.swift; sourceTree = "<group>"; };
 		B41B85BACAEFF94E8457438F /* SetiIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetiIcon.swift; sourceTree = "<group>"; };
 		B8856A7B3F5ECE4A366D257C /* LoupePriority.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoupePriority.swift; sourceTree = "<group>"; };
 		BE8AD7E06ED431D21895D57B /* FamiljenGrotesk-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "FamiljenGrotesk-Medium.ttf"; sourceTree = "<group>"; };
@@ -92,6 +97,7 @@
 		CF321EBD0E8C2A263AC93236 /* TicketCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TicketCard.swift; sourceTree = "<group>"; };
 		D1ED1C3EB71696004AAC8302 /* SpaceMono-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "SpaceMono-Regular.ttf"; sourceTree = "<group>"; };
 		D80FE5A376838AD37C6483A1 /* SessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionView.swift; sourceTree = "<group>"; };
+		E5FFBA72B0360B6611D251AF /* SessionsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsStore.swift; sourceTree = "<group>"; };
 		ECA4134BBC32007B017BB137 /* PRReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PRReviewView.swift; sourceTree = "<group>"; };
 		F225D8B8621DD3673E2D8920 /* LoupeFont.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoupeFont.swift; sourceTree = "<group>"; };
 		F7CDF81FFA139932EA4254EA /* LoupeSwiftUIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoupeSwiftUIApp.swift; sourceTree = "<group>"; };
@@ -144,10 +150,13 @@
 		4571EAEC15BBB4EFD33E3F95 /* Session */ = {
 			isa = PBXGroup;
 			children = (
+				05A9935B6AC895F1155D192F /* HandoffDock.swift */,
+				11F7635045753B2D39BE1237 /* HandoffDrawer.swift */,
+				AFD4A1769E5E97C3539A53B0 /* HandoffPreviewSupport.swift */,
+				262F20D9FC315851307A3B70 /* SessionsListView.swift */,
+				E5FFBA72B0360B6611D251AF /* SessionsStore.swift */,
 				3B14AC3824481DBA69409424 /* SessionStore.swift */,
 				D80FE5A376838AD37C6483A1 /* SessionView.swift */,
-				8B127D66A48AB18E14A6FD0D /* SessionsStore.swift */,
-				77B15788AD19670E8BAD9A79 /* SessionsListView.swift */,
 			);
 			path = Session;
 			sourceTree = "<group>";
@@ -253,6 +262,8 @@
 			dependencies = (
 			);
 			name = LoupeSwiftUI;
+			packageProductDependencies = (
+			);
 			productName = LoupeSwiftUI;
 			productReference = AA1E9FA70B7AE21433DBF0F3 /* LoupeSwiftUI.app */;
 			productType = "com.apple.product-type.application";
@@ -276,7 +287,6 @@
 			);
 			mainGroup = 0E3D5A35A52AA242B2AA482B;
 			minimizedProjectReferenceProxies = 1;
-			productRefGroup = D7F037D83FAE5247101189D3 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -313,6 +323,9 @@
 				07F1F5D75E2761DFC779ECB3 /* DaemonModels.swift in Sources */,
 				A25BA02F5B7F8A3E71A7DC37 /* ExpandableSummaryText.swift in Sources */,
 				61D7035041ADD00CA2204C7E /* GitHubModels.swift in Sources */,
+				0DA0E25154BDC2BC88A1AA1B /* HandoffDock.swift in Sources */,
+				B49C7B2AA4E9600FDE3434E7 /* HandoffDrawer.swift in Sources */,
+				787D8258D1AFA8451C8DF860 /* HandoffPreviewSupport.swift in Sources */,
 				976F424C1051835DF1465C02 /* HomeView.swift in Sources */,
 				D5260A0BA354CBFDFB79BB8F /* Inbox.swift in Sources */,
 				3D5E63ED0E44BB112B9CDC51 /* InboxComponents.swift in Sources */,
@@ -337,12 +350,12 @@
 				B99C178F1359A3FA61C7DAB9 /* SessionModels.swift in Sources */,
 				0760C3D9D1C9A06C952E59F8 /* SessionStore.swift in Sources */,
 				F095B5B5A68613D025ADD390 /* SessionView.swift in Sources */,
+				7A8AC73179D327F35B7F9856 /* SessionsListView.swift in Sources */,
+				88B74D3E1CD4D72C21D99C28 /* SessionsStore.swift in Sources */,
 				2FE5F1E6C97F115DDC6EB399 /* SetiIcon.swift in Sources */,
 				6F0982CCD5FAB572B7697F73 /* SummaryTruncation.swift in Sources */,
 				A0460B62A16AAB1192AC240E /* TicketCard.swift in Sources */,
 				C7BBD50D5561AEF0B78A549D /* TicketMapping.swift in Sources */,
-				D2A7292C44281B3933C5DF85 /* SessionsStore.swift in Sources */,
-				F5146E2B6CD6B1A7A58455A0 /* SessionsListView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

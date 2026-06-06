@@ -18,7 +18,8 @@ actor LoupeClient {
         self.token = pairing.token
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest = 15
-        cfg.waitsForConnectivity = true
+        cfg.timeoutIntervalForResource = 20
+        cfg.waitsForConnectivity = false
         self.session = URLSession(configuration: cfg)
 
         let stream = URLSessionConfiguration.default
@@ -42,6 +43,11 @@ actor LoupeClient {
         let resp = try await request(path: "/api/sessions/start", method: "POST", body: data, as: DispatchResponse.self)
         if !resp.ok { throw LoupeError.api(.init(code: "DISPATCH_FAILED", message: resp.error ?? "Dispatch failed.", retryable: true)) }
         return resp
+    }
+
+    func sessions() async throws -> [SessionSnapshot] {
+        let response = try await request(path: "/api/sessions", method: "GET", as: SessionsResponse.self)
+        return response.ok ? response.sessions : []
     }
 
     // MARK: PR review
@@ -163,6 +169,9 @@ actor LoupeClient {
         do {
             (data, response) = try await session.data(for: req)
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                throw CancellationError()
+            }
             throw LoupeError.transport(error.localizedDescription)
         }
 
@@ -186,6 +195,11 @@ actor LoupeClient {
     }
 
     private struct EmptyData: Decodable {}
+
+    private struct SessionsResponse: Decodable {
+        let ok: Bool
+        let sessions: [SessionSnapshot]
+    }
 
     private struct BareErrorResponse: Decodable {
         let error: String?

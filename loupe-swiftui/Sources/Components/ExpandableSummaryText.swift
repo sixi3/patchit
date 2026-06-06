@@ -6,6 +6,7 @@ import SwiftUI
 struct ExpandableSummaryText: View {
     let text: String
     @Binding var isExpanded: Bool
+    var isInteractive = true
 
     @State private var containerWidth: CGFloat = 0
 
@@ -23,30 +24,41 @@ struct ExpandableSummaryText: View {
     }
 
     var body: some View {
-        Button {
-            guard canExpand || isExpanded else { return }
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isExpanded.toggle()
+        Group {
+            if isInteractive {
+                Button {
+                    guard canExpand || isExpanded else { return }
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    summaryText
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint(
+                    isExpanded
+                        ? "Tap to collapse"
+                        : (canExpand ? "Tap to show full summary" : "")
+                )
+            } else {
+                summaryText
+                    .accessibilityHint("")
             }
-        } label: {
-            Text(displayText)
-                .font(LoupeFont.body)
-                .foregroundStyle(Color.textSecondary)
-                .multilineTextAlignment(.leading)
-                .lineLimit(isExpanded || containerWidth > 0 ? nil : 2)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, LoupeSpace.xs)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onGeometryChange(for: CGFloat.self, of: \.size.width) { containerWidth = $0 }
-        .buttonStyle(.plain)
         .accessibilityLabel("Blueprint summary")
-        .accessibilityHint(
-            isExpanded
-                ? "Tap to collapse"
-                : (canExpand ? "Tap to show full summary" : "")
-        )
+    }
+
+    private var summaryText: some View {
+        Text(displayText)
+            .font(LoupeFont.body)
+            .foregroundStyle(Color.textSecondary)
+            .multilineTextAlignment(.leading)
+            .lineLimit(isExpanded || containerWidth > 0 ? nil : 2)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, LoupeSpace.xs)
     }
 }

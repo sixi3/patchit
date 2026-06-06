@@ -12,6 +12,7 @@ enum TicketDetailTab: Hashable {
 // repo pill, confidence ring + summary, metric tabs, detail panel, dispatch row.
 struct TicketCard: View {
     let item: InboxItem
+    var showsDispatchControls = true
     var onDispatch: (Agent) -> Void = { _ in }
     var onRefreshBlueprint: () -> Void = {}
 
@@ -49,6 +50,7 @@ struct TicketCard: View {
     }
 
     private func selectTab(_ tab: TicketDetailTab) {
+        guard showsDispatchControls else { return }
         guard availableTabs.contains(tab) else { return }
         withAnimation(.easeInOut(duration: 0.2)) {
             selectedTab = tab
@@ -114,16 +116,23 @@ struct TicketCard: View {
             HStack(alignment: .center, spacing: 12) {
                 ConfidenceRing(value: item.isAnalyzing ? 0 : item.confidence)
                     .opacity(item.isDegraded ? 0.4 : 1)
-                ExpandableSummaryText(text: summaryText, isExpanded: $isSummaryExpanded)
+                ExpandableSummaryText(
+                    text: summaryText,
+                    isExpanded: $isSummaryExpanded,
+                    isInteractive: showsDispatchControls
+                )
             }
             .animation(.easeInOut(duration: 0.2), value: isSummaryExpanded)
 
             if !availableTabs.isEmpty {
                 detailTabStrip
+                    .allowsHitTesting(showsDispatchControls)
                 detailPanel
             }
 
-            dispatchRow
+            if showsDispatchControls {
+                dispatchRow
+            }
         }
         .padding(LoupeSpace.lg)
     }
@@ -260,9 +269,11 @@ struct TicketCard: View {
                 }
             }
             Spacer(minLength: 0)
-            Button("Refresh") { onRefreshBlueprint() }
-                .font(LoupeFont.caption)
-                .foregroundStyle(Color.accent)
+            if showsDispatchControls {
+                Button("Refresh") { onRefreshBlueprint() }
+                    .font(LoupeFont.caption)
+                    .foregroundStyle(Color.accent)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)

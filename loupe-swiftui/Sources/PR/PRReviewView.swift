@@ -91,7 +91,7 @@ struct PRReviewView: View {
                     .background(RoundedRectangle(cornerRadius: LoupeRadius.control).fill(Color.chipFill))
             }.buttonStyle(.plain)
             Button { Task { await store.merge() } } label: {
-                Text("Merge").font(LoupeFont.button).foregroundStyle(.white)
+                Text(pr.draft ? "Mark ready & merge" : "Merge").font(LoupeFont.button).foregroundStyle(.white)
                     .frame(maxWidth: .infinity).padding(.vertical, 14)
                     .background(RoundedRectangle(cornerRadius: LoupeRadius.control).fill(Color.ringHigh))
             }.buttonStyle(.plain)
