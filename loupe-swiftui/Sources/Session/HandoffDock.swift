@@ -178,7 +178,7 @@ struct HandoffDock: View {
             if let confidence = summary.confidence {
                 HStack(spacing: 5) {
                     Circle().fill(confidenceTint(confidence)).frame(width: 7, height: 7)
-                    Text("\(confidence)%")
+                    Text("\(confidence)% confidence")
                         .font(LoupeFont.code)
                         .foregroundStyle(Color.textSecondary)
                 }

@@ -60,6 +60,20 @@ final class SessionStore: Identifiable {
         self.lastError = snapshot.events.last(where: { $0.type == "error" })?.text
     }
 
+    func apply(snapshot: SessionSnapshot) {
+        events = Self.mergedEvents(existing: events, incoming: snapshot.events)
+        sessionId = snapshot.id
+        branch = snapshot.branch ?? branch
+        prRef = Self.prRef(from: events)
+        phase = Self.phase(from: snapshot)
+        lastError = events.last(where: { $0.type == "error" })?.text
+        hasStarted = true
+        if !isRunning {
+            streamTask?.cancel()
+            streamTask = nil
+        }
+    }
+
     /// True once the agent pushed a branch we can open a PR from.
     var hasBranch: Bool { branch != nil }
 
@@ -168,6 +182,14 @@ final class SessionStore: Identifiable {
             return .failed(snapshot.events.last(where: { $0.type == "error" })?.text ?? "The agent run did not complete.")
         }
         return .completed(success: false)
+    }
+
+    private static func mergedEvents(existing: [SessionEvent], incoming: [SessionEvent]) -> [SessionEvent] {
+        var byId = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        for event in incoming {
+            byId[event.id] = event
+        }
+        return byId.values.sorted { $0.id < $1.id }
     }
 
     private static func date(from iso: String?) -> Date? {
