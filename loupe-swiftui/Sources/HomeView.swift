@@ -169,6 +169,7 @@ struct HomeView: View {
         ForEach(items) { item in
             TicketCard(
                 item: item,
+                isRefreshingBlueprint: store.isRefreshingBlueprint(item),
                 onDispatch: { dispatch(item, harness: $0) },
                 onRefreshBlueprint: { store.refreshBlueprint(item) }
             )

@@ -23,6 +23,7 @@ final class InboxStore {
     private(set) var pairing: Pairing?
     private(set) var lastSynced: Date?
     private(set) var githubConnected = true   // flips false on GITHUB_AUTH_REQUIRED
+    private(set) var refreshingBlueprintIDs: Set<String> = []
     @ObservationIgnored private var blueprintPollTask: Task<Void, Never>?
 
     init() {
@@ -94,11 +95,24 @@ final class InboxStore {
         guard let pairing else { return }
         let parts = item.repoFullName.split(separator: "/", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return }
+        guard !refreshingBlueprintIDs.contains(item.id) else { return }
+        refreshingBlueprintIDs.insert(item.id)
         Task {
             let client = LoupeClient(pairing: pairing)
-            try? await client.refreshBlueprint(owner: parts[0], repo: parts[1], number: item.number)
-            await refresh()
+            defer { refreshingBlueprintIDs.remove(item.id) }
+            do {
+                try await client.refreshBlueprint(owner: parts[0], repo: parts[1], number: item.number)
+                await refresh()
+            } catch is CancellationError {
+                return
+            } catch {
+                phase = .failed((error as? LocalizedError)?.errorDescription ?? "\(error)")
+            }
         }
+    }
+
+    func isRefreshingBlueprint(_ item: InboxItem) -> Bool {
+        refreshingBlueprintIDs.contains(item.id)
     }
 
     private func scheduleBlueprintPollIfNeeded() {

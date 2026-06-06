@@ -13,6 +13,7 @@ enum TicketDetailTab: Hashable {
 struct TicketCard: View {
     let item: InboxItem
     var showsDispatchControls = true
+    var isRefreshingBlueprint = false
     var onDispatch: (Agent) -> Void = { _ in }
     var onRefreshBlueprint: () -> Void = {}
 
@@ -220,6 +221,7 @@ struct TicketCard: View {
                     } label: {
                         Label("Refresh Blueprint", systemImage: "arrow.clockwise")
                     }
+                    .disabled(isRefreshingBlueprint)
                 }
 
                 if let url = URL(string: item.issueURL), !item.issueURL.isEmpty {
@@ -270,9 +272,15 @@ struct TicketCard: View {
             }
             Spacer(minLength: 0)
             if showsDispatchControls {
-                Button("Refresh") { onRefreshBlueprint() }
-                    .font(LoupeFont.caption)
-                    .foregroundStyle(Color.accent)
+                if isRefreshingBlueprint {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(Color.accent)
+                } else {
+                    Button("Refresh") { onRefreshBlueprint() }
+                        .font(LoupeFont.caption)
+                        .foregroundStyle(Color.accent)
+                }
             }
         }
         .padding(.horizontal, 10)
@@ -291,21 +299,28 @@ struct TicketCard: View {
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
             if showsDispatchControls {
-                Button {
-                    onRefreshBlueprint()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color.accent)
+                if isRefreshingBlueprint {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(Color.accent)
                         .frame(width: 28, height: 28)
-                        .background(
-                            Circle()
-                                .fill(Color.surface.opacity(0.72))
-                                .overlay(Circle().stroke(Color.hairline, lineWidth: 1))
-                        )
+                } else {
+                    Button {
+                        onRefreshBlueprint()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color.accent)
+                            .frame(width: 28, height: 28)
+                            .background(
+                                Circle()
+                                    .fill(Color.surface.opacity(0.72))
+                                    .overlay(Circle().stroke(Color.hairline, lineWidth: 1))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Retry Blueprint analysis")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Retry Blueprint analysis")
             }
         }
         .padding(.horizontal, 10)
