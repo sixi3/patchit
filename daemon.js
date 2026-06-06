@@ -34,7 +34,7 @@ const HANDOFF_CONTRACT = `
 ---
 Output protocol (follow exactly):
 
-While you work, narrate in short plain sentences — one line per meaningful step (e.g. "Spinning up a branch.", "Found the toolbar button in HomeView.swift.", "Running the build."). Keep shell commands, raw output, and tool noise out of the narration.
+While you work, use your normal CLI-facing assistant prose. Talk through what you are doing and why with the same level of detail you would give in the native CLI. Do not compress the run into terse status labels. Keep raw shell output and machine-only tool noise out of the prose; Loupe captures tool use separately.
 
 When you are completely finished, end your FINAL message with a single fenced JSON block tagged HANDOFF, and nothing after it:
 
@@ -1418,6 +1418,15 @@ function noteAgentMessage(session, text) {
     session.handoff = handoff;
     addEvent(session, { type: "handoff", kind: "captured", handoff });
   }
+}
+
+function emitAgentProse(session, event, rawText) {
+  noteAgentMessage(session, rawText);
+  const display = stripHandoffBlock(rawText);
+  if (!display) return;
+  if (session.lastDisplayedAgentText === display) return;
+  session.lastDisplayedAgentText = display;
+  addEvent(session, { ...event, text: display });
 }
 
 function changedFilesFromCachedDiff(cwd) {
@@ -2850,10 +2859,9 @@ function spawnCodex(session, message, { resume = false } = {}) {
           continue; // lifecycle noise — nothing to show
         }
         const item = payload.item;
-        if (item?.type === "agent_message" && item.text) {
-          noteAgentMessage(session, item.text);
-          const display = stripHandoffBlock(item.text);
-          if (display) addEvent(session, { type: "agent_message", text: display });
+        const agentText = codexAgentText(payload, item);
+        if (agentText) {
+          emitAgentProse(session, { type: "agent_message" }, agentText);
         } else if (item?.type === "reasoning") {
           const rtext = item.text
             || (Array.isArray(item.summary) ? item.summary.map((x) => x?.text || x).join(" ") : item.summary)
@@ -2906,6 +2914,28 @@ function spawnCodex(session, message, { resume = false } = {}) {
   return child;
 }
 
+function codexAgentText(payload, item) {
+  if (item?.type === "agent_message") return item.text || item.message || "";
+  if (payload?.type === "agent_message") return payload.text || payload.message || "";
+  if (payload?.type === "event_msg" && payload.payload?.type === "agent_message") {
+    return payload.payload.text || payload.payload.message || "";
+  }
+  if (payload?.type === "response_item" && payload.payload?.type === "message") {
+    return textFromCodexMessagePayload(payload.payload);
+  }
+  return "";
+}
+
+function textFromCodexMessagePayload(message) {
+  const content = message?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => typeof part === "string" ? part : part?.text || "")
+    .filter(Boolean)
+    .join("\n");
+}
+
 function spawnClaudeCode(session, message, { resume = false } = {}) {
   // --permission-mode acceptEdits auto-allows file writes + safe filesystem commands.
   // --allowedTools "Bash" extends that to arbitrary shell, matching Codex's workspace-write scope.
@@ -2943,9 +2973,7 @@ function spawnClaudeCode(session, message, { resume = false } = {}) {
 
   function flushDelta() {
     if (deltaState.text.trim()) {
-      noteAgentMessage(session, deltaState.text);
-      const display = stripHandoffBlock(deltaState.text);
-      if (display) addEvent(session, { type: "claude", kind: "message", text: display, messageId: deltaState.messageId });
+      emitAgentProse(session, { type: "claude", kind: "message", messageId: deltaState.messageId }, deltaState.text);
     }
     deltaState.text = "";
     deltaState.messageId = null;
@@ -3058,9 +3086,7 @@ function handleClaudeLine(session, payload, deltaState, flushDelta) {
         }
       } else if (block.type === "text" && block.text) {
         // Non-streaming text (rare with --include-partial-messages but possible)
-        noteAgentMessage(session, block.text);
-        const display = stripHandoffBlock(block.text);
-        if (display) addEvent(session, { type: "claude", kind: "message", text: display });
+        emitAgentProse(session, { type: "claude", kind: "message" }, block.text);
       }
     }
     return;
@@ -3090,7 +3116,7 @@ function handleClaudeLine(session, payload, deltaState, flushDelta) {
 
   if (payload.type === "result") {
     flushDelta();
-    if (payload.result) noteAgentMessage(session, payload.result);
+    if (payload.result) emitAgentProse(session, { type: "claude", kind: "message" }, payload.result);
     addEvent(session, {
       type: "claude",
       kind: "result",
