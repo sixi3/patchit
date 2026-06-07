@@ -59,9 +59,10 @@ struct SessionSnapshot: Decodable, Identifiable {
     let exitCode: Int?
     let dispatch: SnapshotDispatch?
     let branch: DispatchResponse.Branch?
+    let metrics: SessionMetrics?
 
     enum CodingKeys: String, CodingKey {
-        case id, harnessId, message, status, events, nextEventId, startedAt, exitCode, dispatch, branch
+        case id, harnessId, message, status, events, nextEventId, startedAt, exitCode, dispatch, branch, metrics
     }
 
     struct SnapshotDispatch: Decodable {
@@ -94,6 +95,7 @@ struct SessionSnapshot: Decodable, Identifiable {
         startedAt = try c.decodeIfPresent(String.self, forKey: .startedAt)
         exitCode = try c.decodeIfPresent(Int.self, forKey: .exitCode)
         dispatch = try c.decodeIfPresent(SnapshotDispatch.self, forKey: .dispatch)
+        metrics = try c.decodeIfPresent(SessionMetrics.self, forKey: .metrics)
         if let rawBranch = try c.decodeIfPresent(SnapshotBranch.self, forKey: .branch),
            let name = rawBranch.name {
             branch = .init(name: name, base: rawBranch.base ?? "", repo: rawBranch.repo ?? dispatch?.ticket?.repo ?? "")
@@ -101,6 +103,15 @@ struct SessionSnapshot: Decodable, Identifiable {
             branch = nil
         }
     }
+}
+
+struct SessionMetrics: Decodable, Equatable {
+    let durationMs: Double?
+    let costUsd: Double?
+    let costKind: String?
+    let currency: String?
+    let blueprintCostUsd: Double?
+    let executionCostUsd: Double?
 }
 
 /// One SSE event: { id, at, type, ... }. Decoded loosely so unknown event
@@ -130,6 +141,9 @@ struct SessionEvent: Decodable, Identifiable {
     let additions: Int?
     let deletions: Int?
     let patch: String?
+    let durationMs: Double?
+    let totalCostUsd: Double?
+    let costUsd: Double?
     let handoff: Handoff?
 
     struct Handoff: Decodable {

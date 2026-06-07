@@ -14,6 +14,8 @@ struct RootView: View {
                 NavigationStack {
                     SessionView(store: .previewHandoff, pairing: .preview)
                 }
+            } else if CommandLine.arguments.contains("-LoupePreviewHome") {
+                HomeView(store: store, sessions: sessions)
             } else {
                 gatedContent
             }

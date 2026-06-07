@@ -40,8 +40,8 @@ enum LoupeColor {
         static let chip         = Color(hex: 0xF1F2F4)  // pill / chip background
 
         // Brand
-        static let indigo       = Color(hex: 0x3D4EF5)  // inbox badge, accents
-        static let indigoWash   = Color(hex: 0xEEF0FF)  // pale brand tint
+        static let indigo       = Color(hex: 0x3043A7)  // inbox badge, accents
+        static let indigoWash   = Color(hex: 0xEAECF7)  // pale brand tint
         static let onlineGreen  = Color(hex: 0x35C75A)  // status dot
 
         // Priority families

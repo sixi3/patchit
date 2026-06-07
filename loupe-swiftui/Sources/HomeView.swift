@@ -21,12 +21,7 @@ struct HomeView: View {
     private var onlineAgents: [Agent] { store.onlineAgents }
 
     var body: some View {
-        ZStack {
-            Color.canvas.ignoresSafeArea()
-
-            homeTabPager
-                .loupeStickyTopBar { stickyHeader }
-        }
+        homeContent
         .task {
             if store.isPaired { await store.refresh() }
         }
@@ -62,6 +57,63 @@ struct HomeView: View {
             }
         }
         .onDisappear { pendingDispatchTask?.cancel() }
+    }
+
+    // MARK: Home shell (native bottom tabs on iOS 26, top tabs as fallback)
+    @ViewBuilder
+    private var homeContent: some View {
+        if #available(iOS 26.0, *) {
+            nativeTabHome
+        } else {
+            legacyTabHome
+        }
+    }
+
+    /// iOS 26: native Liquid Glass tab bar pinned to the bottom. It minimizes
+    /// (slides toward the bottom) on scroll-down and restores on scroll-up via
+    /// `tabBarMinimizeBehavior`. A horizontal swipe still pages between tabs.
+    @available(iOS 26.0, *)
+    private var nativeTabHome: some View {
+        TabView(selection: $homeTab) {
+            Tab(HomeTab.tickets.title, systemImage: HomeTab.tickets.icon, value: HomeTab.tickets) {
+                homeTabPage { ticketsContent }
+                    .loupeStickyTopBar { topHeaderRow }
+            }
+            Tab(HomeTab.prs.title, systemImage: HomeTab.prs.icon, value: HomeTab.prs) {
+                homeTabPage { prsContent }
+                    .loupeStickyTopBar { topHeaderRow }
+            }
+        }
+        .tabBarMinimizeBehavior(.onScrollDown)
+        .tint(Color.accent)
+        .background(Color.canvas.ignoresSafeArea())
+        .simultaneousGesture(swipePagingGesture)
+    }
+
+    /// Pre-iOS 26 fallback: the original top glass tab switcher + horizontal pager.
+    private var legacyTabHome: some View {
+        ZStack {
+            Color.canvas.ignoresSafeArea()
+            homeTabPager
+                .loupeStickyTopBar { stickyHeader }
+        }
+    }
+
+    /// Horizontal swipe drives the same `homeTab` selection the native bar exposes,
+    /// so users keep swipe-paging between Tickets and PRs alongside the bottom bar.
+    private var swipePagingGesture: some Gesture {
+        DragGesture(minimumDistance: 24)
+            .onEnded { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                guard abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
+                let tabs = HomeTab.allCases
+                guard let idx = tabs.firstIndex(of: homeTab) else { return }
+                let next = dx < 0 ? idx + 1 : idx - 1
+                guard tabs.indices.contains(next) else { return }
+                withAnimation(.snappy(duration: 0.3)) { homeTab = tabs[next] }
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }
     }
 
     private func dispatch(_ item: InboxItem, harness: Agent) {
@@ -245,7 +297,7 @@ struct HomeView: View {
         .overlay(RoundedRectangle(cornerRadius: LoupeRadius.control).stroke(Color.hairline, lineWidth: 1))
     }
 
-    // MARK: Sticky header (user row + tabs)
+    // MARK: Sticky header (legacy: user row + top tab switcher)
     private var stickyHeader: some View {
         VStack(spacing: 0) {
             userInfoRow
@@ -254,6 +306,13 @@ struct HomeView: View {
                 .padding(.horizontal, LoupeSpace.screenInset)
                 .padding(.vertical, LoupeSpace.xl)
         }
+    }
+
+    // MARK: Top header (native bottom-tab mode: user row only, tabs live at the bottom)
+    private var topHeaderRow: some View {
+        userInfoRow
+            .padding(.horizontal, LoupeSpace.screenInset)
+            .padding(.vertical, LoupeSpace.sm)
     }
 
     // MARK: User info / workstation selector

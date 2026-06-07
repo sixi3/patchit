@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 // MARK: - SessionView
@@ -17,8 +18,8 @@ struct SessionView: View {
         return false
     }
 
-    private var transcriptItems: [StreamTranscriptItem] {
-        StreamTranscriptItem.build(from: store.events)
+    private var timelineBlocks: [SessionTimelineBlock] {
+        SessionTimelineBlock.build(from: store.events)
     }
 
     var body: some View {
@@ -79,28 +80,28 @@ struct SessionView: View {
     }
 
     private var sessionToolbarContent: some View {
-        HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 3) {
             Text(store.item.title)
                 .font(LoupeFont.headline)
                 .foregroundStyle(Color.textPrimary)
                 .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            AgentGlyph(agent: store.harness, size: 24)
+            SessionHeaderMetrics(store: store)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
-                    if transcriptItems.isEmpty {
+                    if timelineBlocks.isEmpty {
                         AgentProsePlaceholder(agent: store.harness, isRunning: store.isRunning)
                             .id("waiting")
                     } else {
                         AgentTranscript(
                             agent: store.harness,
-                            items: transcriptItems
+                            blocks: timelineBlocks,
+                            sessionRunning: store.isRunning
                         )
                     }
                 }
@@ -109,7 +110,7 @@ struct SessionView: View {
                 .padding(.bottom, showDock ? 120 : LoupeSpace.xxl)
             }
             .onChange(of: store.events.count) {
-                if let last = transcriptItems.last {
+                if let last = timelineBlocks.last {
                     withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                 }
             }
@@ -174,16 +175,20 @@ struct SessionView: View {
 
 private struct AgentTranscript: View {
     let agent: Agent
-    let items: [StreamTranscriptItem]
+    let blocks: [SessionTimelineBlock]
+    let sessionRunning: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             AgentGlyph(agent: agent, size: 28)
                 .padding(.top, 1)
             LazyVStack(alignment: .leading, spacing: 14) {
-                ForEach(items) { item in
-                    TranscriptEventRow(item: item)
-                        .id(item.id)
+                ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
+                    SessionTimelineBlockView(
+                        block: block,
+                        active: sessionRunning && index == blocks.count - 1
+                    )
+                    .id(block.id)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -205,6 +210,287 @@ private struct AgentProsePlaceholder: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+private struct SessionHeaderMetrics: View {
+    let store: SessionStore
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            HStack(spacing: 7) {
+                Image(systemName: "clock")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(formatDuration(store.elapsedDuration))
+                if let cost = store.displayCostLabel {
+                    Text("•")
+                        .foregroundStyle(Color.textMuted.opacity(0.7))
+                    Text(cost)
+                }
+            }
+            .font(LoupeFont.caption)
+            .foregroundStyle(Color.textSecondary)
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+            .opacity(store.elapsedDuration > 0 || store.displayCostLabel != nil ? 1 : 0)
+        }
+    }
+
+    private func formatDuration(_ value: TimeInterval) -> String {
+        let seconds = max(0, Int(value.rounded()))
+        let hours = seconds / 3600
+        let minutes = (seconds % 3600) / 60
+        let secs = seconds % 60
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        if minutes > 0 { return "\(minutes)m \(secs)s" }
+        return "\(secs)s"
+    }
+
+}
+
+private struct SessionTimelineBlockView: View {
+    let block: SessionTimelineBlock
+    let active: Bool
+
+    var body: some View {
+        switch block.kind {
+        case .prose:
+            Text(block.proseText)
+                .font(LoupeFont.bodyMedium)
+                .foregroundStyle(Color.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .thought:
+            TimelineAccordion(
+                title: active ? "Thinking..." : "Thought for \(block.durationLabel)",
+                rows: block.items,
+                style: .thought
+            )
+        case .worked:
+            TimelineAccordion(
+                title: active ? "Working..." : "Worked for \(block.durationLabel)",
+                rows: block.items,
+                style: .worked
+            )
+        case .edit:
+            EditFileContainer(block: block)
+        }
+    }
+}
+
+private struct TimelineAccordion: View {
+    enum Style { case thought, worked }
+
+    let title: String
+    let rows: [StreamTranscriptItem]
+    let style: Style
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.snappy(duration: 0.2)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 5) {
+                    Text(title)
+                        .font(LoupeFont.bodyMedium)
+                        .foregroundStyle(Color.textSecondary)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.textMuted)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                LazyVStack(alignment: .leading, spacing: style == .thought ? 8 : 9) {
+                    ForEach(rows) { item in
+                        switch style {
+                        case .thought:
+                            ThoughtTextBlock(text: item.event.displayText)
+                        case .worked:
+                            WorkedActionRow(item: item)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct EditFileContainer: View {
+    let block: SessionTimelineBlock
+
+    private var filePath: String? { block.items.first?.editFilePath }
+    private var fileName: String { block.items.first?.editFileName ?? "file" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 4) {
+                Text("Edited")
+                    .font(LoupeFont.body)
+                    .foregroundStyle(Color.textSecondary)
+                    .lineLimit(1)
+                HStack(alignment: .center, spacing: 2) {
+                    if let filePath {
+                        SetiIconView(path: filePath, size: 17)
+                    }
+                    Text(fileName)
+                        .font(LoupeFont.bodyMedium)
+                        .foregroundStyle(Color.textPrimary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(block.items) { item in
+                    EditChangeRow(item: item)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: LoupeRadius.control)
+                .fill(
+                    LinearGradient(
+                        colors: [Color(hex: 0xFFFFFF), Color(hex: 0xEBE9E5)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: LoupeRadius.control)
+                .stroke(Color(hex: 0xD9D7D3, alpha: 0.5), lineWidth: 1)
+        )
+    }
+}
+
+private struct EditChangeRow: View {
+    let item: StreamTranscriptItem
+    @State private var expanded = false
+
+    private var canExpand: Bool { item.diffPatch != nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                guard canExpand else { return }
+                withAnimation(.snappy(duration: 0.2)) { expanded.toggle() }
+            } label: {
+                HStack(alignment: .center, spacing: 6) {
+                    editStats
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.editSummary ?? "Updated \(item.editFileName).")
+                            .font(LoupeFont.bodyMedium)
+                            .foregroundStyle(Color.textPrimary)
+                            .lineLimit(2)
+                        if let lineRange = item.editLineRange {
+                            HStack(spacing: 4) {
+                                Image(systemName: "text.line.first.and.arrowtriangle.forward")
+                                    .font(.system(size: 11, weight: .semibold))
+                                Text(lineRange)
+                            }
+                            .font(LoupeFont.caption)
+                            .foregroundStyle(Color.textSecondary)
+                            .lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    if canExpand {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Color.textMuted)
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 11)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded, let patch = item.diffPatch {
+                SessionDiffText(patch: patch)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: LoupeRadius.chip).fill(Color.surface))
+        .overlay(
+            RoundedRectangle(cornerRadius: LoupeRadius.chip)
+                .stroke(Color(hex: 0xD9D7D3, alpha: 0.5), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var editStats: some View {
+        if let stats = item.editStats {
+            HStack(spacing: 3) {
+                Text("+\(stats.additions)")
+                    .foregroundStyle(Color.ringHigh)
+                Text("/")
+                    .foregroundStyle(Color.textMuted)
+                Text("-\(stats.deletions)")
+                    .foregroundStyle(Color.riskAlert)
+            }
+            .font(LoupeFont.bodyMedium)
+            .lineLimit(1)
+        } else {
+            Text("+0 / -0")
+                .font(LoupeFont.bodyMedium)
+                .foregroundStyle(Color.textMuted)
+        }
+    }
+}
+
+private struct ThoughtTextBlock: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(LoupeFont.body)
+            .foregroundStyle(Color.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: LoupeRadius.chip).fill(Color.chipFill.opacity(0.75)))
+    }
+}
+
+private struct WorkedActionRow: View {
+    let item: StreamTranscriptItem
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: item.event.actionPillIcon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(item.event.actionPillTint)
+                .frame(width: 18, height: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.event.accordionTitle)
+                    .font(LoupeFont.body)
+                    .foregroundStyle(Color.textSecondary)
+                    .lineLimit(1)
+                if let summary = item.resultSummary {
+                    Text(summary)
+                        .font(LoupeFont.caption)
+                        .foregroundStyle(Color.textMuted)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -362,10 +648,13 @@ private struct StreamTranscriptItem: Identifiable {
 
     var isProse: Bool { event.isTranscriptProse }
     var isEdit: Bool { event.isTranscriptEditAction }
+    var isThought: Bool { event.isTranscriptThought }
+    var isWork: Bool { !isProse && !isEdit && !isThought }
     var editSummary: String? { event.editSummaryText(result: result) }
     var editFileName: String { event.editFileName }
     var editFilePath: String? { event.filePath }
     var editStats: (additions: Int, deletions: Int)? { event.diffStats(result: result) }
+    var editLineRange: String? { event.editLineRange(result: result) }
     var resultSummary: String? { result?.resultSummaryText }
     var diffPatch: String? {
         if let patch = event.patch, !patch.isEmpty { return patch }
@@ -376,6 +665,7 @@ private struct StreamTranscriptItem: Identifiable {
     static func build(from events: [SessionEvent]) -> [StreamTranscriptItem] {
         var seenProse = Set<String>()
         var items: [StreamTranscriptItem] = []
+        var capturedHandoff = false
 
         func attach(_ result: SessionEvent) {
             if let toolUseId = result.toolUseId,
@@ -389,17 +679,115 @@ private struct StreamTranscriptItem: Identifiable {
         }
 
         for event in events {
+            if event.type == "handoff" {
+                capturedHandoff = true
+                continue
+            }
+            if event.isTranscriptHidden { continue }
             if event.isTranscriptProse {
+                if capturedHandoff { continue }
                 let key = event.displayText.normalizedTranscriptText
                 guard seenProse.insert(key).inserted else { continue }
                 items.append(StreamTranscriptItem(id: event.id, event: event))
             } else if event.isTranscriptToolResult {
                 attach(event)
-            } else if event.isTranscriptToolCall {
+            } else if event.isTranscriptThought || event.isTranscriptToolCall {
                 items.append(StreamTranscriptItem(id: event.id, event: event))
             }
         }
         return items
+    }
+}
+
+private struct SessionTimelineBlock: Identifiable {
+    enum Kind: Equatable { case prose, thought, worked, edit }
+
+    let id: String
+    let kind: Kind
+    let items: [StreamTranscriptItem]
+
+    var proseText: String { items.first?.event.displayText ?? "" }
+
+    var durationLabel: String {
+        let dates = items.compactMap(\.event.eventDate)
+        let interval: TimeInterval
+        if let first = dates.first, let last = dates.last {
+            interval = max(1, last.timeIntervalSince(first))
+        } else {
+            interval = 1
+        }
+        return Self.format(interval)
+    }
+
+    static func build(from events: [SessionEvent]) -> [SessionTimelineBlock] {
+        let transcriptItems = StreamTranscriptItem.build(from: events)
+        var blocks: [SessionTimelineBlock] = []
+        var pendingThought: [StreamTranscriptItem] = []
+        var pendingWork: [StreamTranscriptItem] = []
+
+        func flushThought() {
+            guard let first = pendingThought.first else { return }
+            blocks.append(.init(id: "thought-\(first.id)", kind: .thought, items: pendingThought))
+            pendingThought.removeAll()
+        }
+
+        func flushWork() {
+            guard let first = pendingWork.first else { return }
+            blocks.append(.init(id: "worked-\(first.id)", kind: .worked, items: pendingWork))
+            pendingWork.removeAll()
+        }
+
+        func appendWork(_ item: StreamTranscriptItem) {
+            if pendingWork.last?.event.timelineDedupeKey == item.event.timelineDedupeKey { return }
+            pendingWork.append(item)
+        }
+
+        func appendEdit(_ item: StreamTranscriptItem) {
+            guard let last = blocks.last,
+                  last.kind == .edit,
+                  last.editFilePath == item.editFilePath else {
+                blocks.append(.init(id: "edit-\(item.id)", kind: .edit, items: [item]))
+                return
+            }
+            if last.items.last?.event.editDedupeKey == item.event.editDedupeKey { return }
+            var nextItems = last.items
+            nextItems.append(item)
+            blocks.removeLast()
+            blocks.append(.init(id: last.id, kind: .edit, items: nextItems))
+        }
+
+        for item in transcriptItems {
+            if item.isProse {
+                flushThought()
+                flushWork()
+                blocks.append(.init(id: "prose-\(item.id)", kind: .prose, items: [item]))
+            } else if item.isEdit {
+                flushThought()
+                flushWork()
+                appendEdit(item)
+            } else if item.isThought {
+                flushWork()
+                pendingThought.append(item)
+            } else {
+                flushThought()
+                appendWork(item)
+            }
+        }
+        flushThought()
+        flushWork()
+        return blocks
+    }
+
+    var editFilePath: String? {
+        items.first?.editFilePath
+    }
+
+    private static func format(_ value: TimeInterval) -> String {
+        let seconds = max(1, Int(value.rounded()))
+        let minutes = seconds / 60
+        let secs = seconds % 60
+        if minutes > 0 { return "\(minutes)m \(secs)s" }
+        return "\(secs)s"
     }
 }
 
@@ -435,13 +823,25 @@ private extension SessionEvent {
     }
 
     var isTranscriptProse: Bool {
-        isNativeAgentProse || type == "thinking"
+        isNativeAgentProse
+    }
+
+    var isTranscriptThought: Bool {
+        type == "thinking"
+    }
+
+    var isTranscriptHidden: Bool {
+        if ["user_message", "done", "handoff", "deviations_computed", "status"].contains(type) { return true }
+        if type == "branch" { return true }
+        if type == "claude", ["thread_start", "result"].contains(kind ?? "") { return true }
+        return false
     }
 
     var isTranscriptToolCall: Bool {
         if type == "error" { return true }
         if type == "file_change" { return true }
         if type == "action" { return true }
+        if type == "command" { return true }
         if type == "claude" {
             if kind == "tool_use", ["Edit", "MultiEdit", "Write", "NotebookEdit"].contains(toolName ?? "") {
                 return false
@@ -569,6 +969,12 @@ private extension SessionEvent {
         return (added, removed)
     }
 
+    func editLineRange(result: SessionEvent?) -> String? {
+        let range = (patch ?? result?.patch).diffLineRange
+        guard let range else { return nil }
+        return "Ln \(range)"
+    }
+
     private var shellActionTitle: (verb: String, object: String?) {
         let command = (input ?? text ?? "").stripToolNamePrefix(toolName).stripCommandPrefix.lowercased()
         if command.contains("xcodebuild") {
@@ -626,6 +1032,36 @@ private extension SessionEvent {
             path ?? "",
             detailText
         ].joined(separator: "|")
+    }
+
+    var timelineDedupeKey: String {
+        [
+            type,
+            kind ?? "",
+            tool ?? "",
+            toolName ?? "",
+            filePath ?? "",
+            (input ?? text ?? output ?? "").stripCommandPrefix.normalizedTranscriptText
+        ].joined(separator: "|")
+    }
+
+    var editDedupeKey: String {
+        [
+            type,
+            kind ?? "",
+            tool ?? "",
+            toolName ?? "",
+            filePath ?? "",
+            "\(additions ?? -1)",
+            "\(deletions ?? -1)",
+            patch ?? "",
+            (input ?? text ?? "").normalizedTranscriptText
+        ].joined(separator: "|")
+    }
+
+    var eventDate: Date? {
+        guard let at else { return nil }
+        return ISO8601DateFormatter().date(from: at)
     }
 
     var category: Category {
@@ -801,6 +1237,31 @@ private extension Optional where Wrapped == String {
             if line.hasPrefix("-") { deletions += 1 }
         }
         return (additions, deletions)
+    }
+
+    var diffLineRange: String? {
+        guard let self, !self.isEmpty else { return nil }
+        let pattern = #"@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let nsRange = NSRange(self.startIndex..<self.endIndex, in: self)
+        let matches = regex.matches(in: self, range: nsRange)
+        let ranges: [(start: Int, end: Int)] = matches.compactMap { match in
+            guard let startRange = Range(match.range(at: 1), in: self),
+                  let start = Int(self[startRange]) else { return nil }
+            let count: Int
+            if match.range(at: 2).location != NSNotFound,
+               let countRange = Range(match.range(at: 2), in: self),
+               let parsed = Int(self[countRange]) {
+                count = parsed
+            } else {
+                count = 1
+            }
+            return (start, max(start, start + max(0, count - 1)))
+        }
+        guard let first = ranges.first else { return nil }
+        let start = ranges.map(\.start).min() ?? first.start
+        let end = ranges.map(\.end).max() ?? first.end
+        return start == end ? "\(start)" : "\(start)-\(end)"
     }
 }
 
