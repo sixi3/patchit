@@ -28,6 +28,7 @@ struct TicketCard: View {
             body_
         }
         .background(Color.surface)
+        .overlay(alignment: .bottom) { Color.hairline.frame(height: 1) }
         .onAppear { reconcileSelectedTab() }
         .onChange(of: item.id) { _, _ in
             reconcileSelectedTab()
