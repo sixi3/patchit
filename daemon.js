@@ -104,7 +104,66 @@ const harnessRegistry = buildHarnessRegistry();
 const config = configManager.config;
 ensureAlphaAuth();
 // Cache the GitHub inbox briefly so the PWA can re-render without hammering the API.
-const inboxCache = { fetchedAt: 0, ttlMs: 60_000, payload: null };
+const inboxCache = { fetchedAt: 0, ttlMs: 60_000, payload: null, emptyStreak: 0 };
+
+// Live inbox push. Clients hold an SSE connection to /api/v1/inbox/stream and
+// the daemon broadcasts a fresh payload whenever the inbox changes (a poll tick
+// found new/updated tickets, or a blueprint finished). The poll loop only runs
+// while at least one client is connected, so we never burn GitHub rate limit
+// when nobody is watching.
+const inboxClients = new Set();
+const INBOX_POLL_MS = Number(process.env.LOUPE_INBOX_POLL_MS || 30_000);
+let inboxPollTimer = null;
+
+function broadcastInbox(payload) {
+  if (!payload) return;
+  const frame = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const res of inboxClients) {
+    try { res.write(frame); } catch { inboxClients.delete(res); }
+  }
+}
+
+// Cheap structural signature: changes when a ticket is added/removed/updated or
+// a blueprint's status flips. Used to avoid broadcasting unchanged payloads.
+function inboxSignature(payload) {
+  if (!payload) return "";
+  const sig = (list) => (list || [])
+    .map((t) => `${t.id}:${t.updatedAt}:${t.blueprint?.status || t.blueprint?.outcome || ""}`)
+    .sort()
+    .join("|");
+  return `${sig(payload.assigned)}#${sig(payload.reviews)}`;
+}
+
+// Rebuild the inbox and push to subscribers if anything changed.
+async function refreshAndBroadcastInbox() {
+  const token = getGithubAccessToken();
+  if (!token) return;
+  const before = inboxSignature(inboxCache.payload);
+  try {
+    const payload = await buildInbox(token);
+    if (inboxSignature(payload) !== before) broadcastInbox(payload);
+  } catch {
+    // Transient GitHub failure; keep the last-known-good and try again next tick.
+  }
+}
+
+// Call when something we know changed the inbox (e.g. a blueprint finished).
+// Invalidate the TTL marker, and push live if anyone is watching — otherwise
+// stay quiet and let the next poll/request rebuild lazily.
+function onInboxMaybeChanged() {
+  inboxCache.fetchedAt = 0;
+  if (inboxClients.size > 0) refreshAndBroadcastInbox();
+}
+
+function startInboxPolling() {
+  if (inboxPollTimer) return;
+  inboxPollTimer = setInterval(() => {
+    if (inboxClients.size === 0) return;   // nobody watching → stay idle
+    refreshAndBroadcastInbox();
+  }, INBOX_POLL_MS);
+  if (inboxPollTimer.unref) inboxPollTimer.unref();
+}
+
 const githubOAuthFlows = new Map();
 const blueprintJobs = new Map();
 const blueprintQueue = [];
@@ -266,12 +325,25 @@ function cleanupGithubOAuthFlows() {
 }
 
 async function fetchGithubInbox(token) {
-  // Two queries, one assignee one review-requested. Search API supports both.
-  const [assignedIssues, reviewRequests, viewer] = await Promise.all([
+  // Assigned issues come from TWO sources unioned together:
+  //   - REST /issues?filter=assigned is immediately consistent, so a brand-new
+  //     assignment shows up right away (search/issues lags behind its index).
+  //   - search/issues keeps cross-repo coverage for repos where you're assigned
+  //     but not an owner/collaborator/org member (REST /issues omits those).
+  // Reviews stay on search (no clean cross-repo REST equivalent).
+  const [assignedSearch, assignedRest, reviewRequests, viewer] = await Promise.all([
     githubRequest(`/search/issues?q=${encodeURIComponent("assignee:@me is:open archived:false")}&per_page=30&sort=updated`, token),
+    githubRequest("/issues?filter=assigned&state=open&per_page=50&sort=updated", token),
     githubRequest(`/search/issues?q=${encodeURIComponent("is:pr is:open review-requested:@me archived:false")}&per_page=30&sort=updated`, token),
     githubRequest("/user", token)
   ]);
+
+  // Union by id; the REST entry wins on conflict (freshest, immediately consistent).
+  const assignedById = new Map();
+  for (const item of (assignedSearch.items || [])) assignedById.set(item.id, item);
+  for (const item of (Array.isArray(assignedRest) ? assignedRest : [])) assignedById.set(item.id, item);
+  const assignedItems = [...assignedById.values()]
+    .sort((a, b) => Date.parse(b.updated_at || 0) - Date.parse(a.updated_at || 0));
 
   // Persist login on first fetch so we can show it in config summary.
   if (viewer?.login && config.github?.accessToken && config.github.login !== viewer.login) {
@@ -349,7 +421,7 @@ async function fetchGithubInbox(token) {
     return ticket;
   }
 
-  const assigned = (assignedIssues.items || []).map((item) => normalize(item, "issue"));
+  const assigned = assignedItems.map((item) => normalize(item, "issue"));
   const reviews = (reviewRequests.items || []).map((item) => normalize(item, "review"));
 
   return {
@@ -358,6 +430,45 @@ async function fetchGithubInbox(token) {
     assigned,
     reviews
   };
+}
+
+// Build the inbox with stale-while-revalidate semantics. Concurrent callers
+// coalesce onto one in-flight build. The cache (inboxCache.payload) is the
+// last-known-good list, served as a fallback so a transient GitHub blip never
+// blanks the app.
+function buildInbox(token) {
+  if (!inboxCache.refreshPromise) {
+    const prev = inboxCache.payload;
+    inboxCache.refreshPromise = fetchGithubInbox(token)
+      .then((payload) => {
+        // Guard against a transient empty response wiping a good inbox: only
+        // accept "assigned went to empty" once it persists across two builds.
+        const wasNonEmpty = (prev?.assigned?.length || 0) > 0;
+        const nowEmpty = (payload?.assigned?.length || 0) === 0;
+        if (wasNonEmpty && nowEmpty) {
+          inboxCache.emptyStreak = (inboxCache.emptyStreak || 0) + 1;
+          if (inboxCache.emptyStreak < 2) return prev;   // keep last-known-good
+        } else {
+          inboxCache.emptyStreak = 0;
+        }
+        inboxCache.fetchedAt = Date.now();
+        inboxCache.payload = payload;
+        return payload;
+      })
+      .finally(() => { inboxCache.refreshPromise = null; });
+  }
+  return inboxCache.refreshPromise;
+}
+
+// Serve the freshest inbox we can, falling back to the last-known-good payload
+// if the live build fails outright.
+async function getInboxPayload(token) {
+  try {
+    return await buildInbox(token);
+  } catch (error) {
+    if (inboxCache.payload) return inboxCache.payload;
+    throw error;
+  }
 }
 
 function normalizeIssuePayload(issue, repoFullName) {
@@ -1246,13 +1357,13 @@ function pumpBlueprintQueue() {
         job.status = "done";
         job.blueprint = publicBlueprint(blueprint);
         job.updatedAt = new Date().toISOString();
-        inboxCache.fetchedAt = 0;
+        onInboxMaybeChanged();
       })
       .catch((error) => {
         job.status = "failed";
         job.error = error?.message || String(error);
         job.updatedAt = new Date().toISOString();
-        inboxCache.fetchedAt = 0;
+        onInboxMaybeChanged();
         console.warn(`Background Blueprint failed for ${job.ticket?.repo || "repo"}#${job.ticket?.number || "ticket"}: ${job.error}`);
       })
       .finally(() => {
@@ -2619,28 +2730,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Stale-while-revalidate. The inbox build does live GitHub calls + per-ticket
-    // git work; coupling the HTTP response to it is what made the app time out.
-    // If we have a previous payload, return it immediately and (when stale)
-    // refresh in the background. Only a cold start with no cache waits on a build.
-    const fresh = inboxCache.payload && (Date.now() - inboxCache.fetchedAt) < inboxCache.ttlMs;
-    if (inboxCache.payload) {
-      sendJson(res, 200, { ok: true, data: inboxCache.payload, error: null });
-      if (!fresh && !inboxCache.refreshing) {
-        inboxCache.refreshing = true;
-        fetchGithubInbox(token)
-          .then((payload) => { inboxCache.fetchedAt = Date.now(); inboxCache.payload = payload; })
-          .catch(() => {})
-          .finally(() => { inboxCache.refreshing = false; });
-      }
-      return;
-    }
-
-    // Cold path: no cached payload yet — build once.
+    // Build fresh, but fall back to the last-known-good list on failure or a
+    // transient empty response (see getInboxPayload) so the app never blanks.
     try {
-      const payload = await fetchGithubInbox(token);
-      inboxCache.fetchedAt = Date.now();
-      inboxCache.payload = payload;
+      const payload = await getInboxPayload(token);
       sendJson(res, 200, { ok: true, data: payload, error: null });
     } catch (error) {
       sendJson(res, error.statusCode || 500, { ok: false, data: null, error: { code: "INBOX_FAILED", message: error.message, retryable: true } });
@@ -2927,15 +3020,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { ok: false, error: "GitHub is not connected. Connect GitHub with OAuth first." });
         return;
       }
-      const force = url.searchParams.get("refresh") === "1";
-      const fresh = inboxCache.payload && (Date.now() - inboxCache.fetchedAt) < inboxCache.ttlMs;
-      if (!force && fresh) {
-        sendJson(res, 200, { ok: true, cached: true, ...inboxCache.payload });
-        return;
-      }
-      const payload = await fetchGithubInbox(token);
-      inboxCache.fetchedAt = Date.now();
-      inboxCache.payload = payload;
+      const payload = await getInboxPayload(token);
       sendJson(res, 200, { ok: true, cached: false, ...payload });
     } catch (error) {
       sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
@@ -3033,6 +3118,31 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
     }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/v1/inbox/stream") {
+    const token = getGithubAccessToken();
+    if (!token) {
+      sendJson(res, 401, { ok: false, error: { code: "GITHUB_AUTH_REQUIRED", message: "Connect GitHub first.", retryable: false } });
+      return;
+    }
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "access-control-allow-origin": "*"
+    });
+    inboxClients.add(res);
+    startInboxPolling();
+    // Keep the connection alive through proxies/idle timeouts.
+    const heartbeat = setInterval(() => { try { res.write(": ping\n\n"); } catch {} }, 25_000);
+    if (heartbeat.unref) heartbeat.unref();
+    req.on("close", () => { clearInterval(heartbeat); inboxClients.delete(res); });
+    // Push the current inbox immediately so the client renders without a round trip.
+    getInboxPayload(token)
+      .then((payload) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(payload)}\n\n`); })
+      .catch(() => {});
     return;
   }
 

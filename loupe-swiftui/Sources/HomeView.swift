@@ -41,7 +41,7 @@ struct HomeView: View {
         .alert("Pair your Mac first", isPresented: $notPairedAlert) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("You're viewing sample tickets. Pair a Mac to dispatch to a real agent.")
+            Text("Pair a Mac to fetch tickets and dispatch to a real agent.")
         }
         .sheet(isPresented: $showWorkstationPicker) {
             workstationSheet
@@ -192,8 +192,11 @@ struct HomeView: View {
                 content()
             }
             .padding(.bottom, LoupeSpace.xxl)
+            .frame(maxWidth: .infinity)
+            .background(Color.canvas)
         }
         .frame(maxHeight: .infinity)
+        .background(Color.canvas)
         .refreshable {
             let haptic = UIImpactFeedbackGenerator(style: .light)
             haptic.prepare()
@@ -207,31 +210,55 @@ struct HomeView: View {
 
     @ViewBuilder
     private var ticketsContent: some View {
-        if case .loading = store.phase, items.isEmpty {
-            statePanel(title: "Loading inbox",
-                       message: "Fetching assigned GitHub issues from your Mac.",
-                       systemImage: "arrow.clockwise")
-                .padding(.horizontal, LoupeSpace.screenInset)
-        } else if case .loaded = store.phase, items.isEmpty {
+        if case .loading = store.phase {
+            fetchingTicketsView
+        } else if case .idle = store.phase, store.isPaired {
+            fetchingTicketsView
+        } else if case .loaded = store.phase, store.items.isEmpty {
             statePanel(title: "Inbox is clear",
                        message: "Assigned GitHub issues will appear here when they are ready to dispatch.",
                        systemImage: "checkmark.circle.fill")
                 .padding(.horizontal, LoupeSpace.screenInset)
+        } else if case .loaded = store.phase, items.isEmpty {
+            statePanel(title: "No actionable tickets",
+                       message: "Fetched tickets are already in progress or have a successful agent run.",
+                       systemImage: "checkmark.circle.fill")
+                .padding(.horizontal, LoupeSpace.screenInset)
         }
-        ForEach(items) { item in
-            TicketCard(
-                item: item,
-                isRefreshingBlueprint: store.isRefreshingBlueprint(item),
-                onDispatch: { dispatch(item, harness: $0) },
-                onRefreshBlueprint: { store.refreshBlueprint(item) }
-            )
-            .transition(.flyToPill)
+        LazyVStack(spacing: LoupeSpace.ticketGap) {
+            ForEach(items) { item in
+                TicketCard(
+                    item: item,
+                    isRefreshingBlueprint: store.isRefreshingBlueprint(item),
+                    onDispatch: { dispatch(item, harness: $0) },
+                    onRefreshBlueprint: { store.refreshBlueprint(item) }
+                )
+                .transition(.flyToPill)
+            }
         }
+    }
+
+    private var fetchingTicketsView: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.large)
+                .tint(Color.accent)
+            Text("Fetching your tickets")
+                .font(LoupeFont.bodyMedium)
+                .foregroundStyle(Color.textPrimary)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 420)
+        .padding(.horizontal, LoupeSpace.screenInset)
     }
 
     @ViewBuilder
     private var prsContent: some View {
-        if store.prs.isEmpty {
+        if case .loading = store.phase {
+            fetchingTicketsView
+        } else if case .idle = store.phase, store.isPaired {
+            fetchingTicketsView
+        } else if store.prs.isEmpty {
             statePanel(title: "No PRs to review",
                        message: "Pull requests where your review is requested will appear here.",
                        systemImage: "arrow.triangle.pull")

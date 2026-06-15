@@ -6,6 +6,7 @@ import SwiftUI
 struct RootView: View {
     @State private var store = InboxStore()
     @State private var sessions = SessionsStore()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -28,6 +29,16 @@ struct RootView: View {
         .task(id: store.pairing?.host) {
             if let pairing = store.pairing {
                 await sessions.hydrate(pairing: pairing)
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, store.isPaired else { return }
+            // Returning to foreground: reconcile immediately (the SSE stream may
+            // have dropped while backgrounded) and make sure it's running again.
+            store.startLiveUpdates()
+            Task { await store.refresh() }
+            if let pairing = store.pairing {
+                Task { await sessions.hydrate(pairing: pairing, force: true) }
             }
         }
     }

@@ -48,12 +48,10 @@ final class SessionsStore {
         }
     }
 
-    /// Issue ids to hide from the inbox: anything dispatched that hasn't failed
-    /// (running, completed, or PR-ready stays out; a failed session lets it return).
+    /// Issue ids to hide from the inbox because they are in progress or have a
+    /// successful/PR-ready result. Failed or inconclusive sessions let the issue
+    /// return so the user can retry or handle it manually.
     var hiddenIssueIDs: Set<String> {
-        Set(sessions.lazy.filter {
-            if case .failed = $0.phase { return false }
-            return true
-        }.map(\.item.id))
+        Set(sessions.lazy.filter(\.hidesSourceIssueInInbox).map(\.item.id))
     }
 }

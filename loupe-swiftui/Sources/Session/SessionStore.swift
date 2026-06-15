@@ -86,6 +86,16 @@ final class SessionStore: Identifiable {
     /// Live (still working) vs. settled (completed/failed) — drives the pill count.
     var isRunning: Bool { phase == .dispatching || phase == .streaming }
 
+    /// Whether the source GitHub issue should be suppressed from the inbox.
+    /// Running sessions leave the card while work is active; successful runs or
+    /// PR-ready sessions stay hidden as fixed. Failed or inconclusive runs let
+    /// the ticket return.
+    var hidesSourceIssueInInbox: Bool {
+        if isRunning || prRef != nil { return true }
+        if case .completed(let success) = phase, success { return true }
+        return false
+    }
+
     var elapsedDuration: TimeInterval {
         if let durationMs = metrics?.durationMs {
             return max(0, durationMs / 1000)
