@@ -748,8 +748,20 @@ function spawnSessionTurn(session, message, { resume = false } = {}) {
   child.on("close", async (code) => {
     if (session._flushStdout) session._flushStdout();
     session.exitCode = code;
-    session.status = code === 0 ? "completed" : "failed";
     session.child = null;
+    // User-initiated stop: abandon the run. Don't push a branch or open a PR
+    // from a half-finished run, and report it as "stopped" rather than "failed".
+    if (session.stopRequested) {
+      session.status = "stopped";
+      addEvent(session, {
+        type: "done",
+        status: "stopped",
+        exitCode: code,
+        text: `${harness.label} run stopped.`
+      });
+      return;
+    }
+    session.status = code === 0 ? "completed" : "failed";
     // After the agent stops, push the branch (if any) and surface the PR URL.
     if (session.branch && code === 0) {
       try {
@@ -844,6 +856,41 @@ function continueSession(id, message) {
   addEvent(session, { type: "user_message", text: message });
   spawnSessionTurn(session, message, { resume: true });
   return session;
+}
+
+// User-initiated stop. Flags the run as abandoned, then kills the harness process
+// group (harness + any subprocess it spawned) with SIGTERM, escalating to SIGKILL
+// if it ignores the term. The child's `close` handler reports the "stopped" state.
+function stopSession(id) {
+  const session = sessions.get(id);
+  if (!session) {
+    const error = new Error("Unknown session.");
+    error.statusCode = 404;
+    throw error;
+  }
+  const child = session.child;
+  if (!child || session.status !== "running") {
+    // Already settled — nothing to kill, treat as a no-op success.
+    return session;
+  }
+  session.stopRequested = true;
+  killProcessTree(child, "SIGTERM");
+  // Escalate if the harness doesn't exit promptly.
+  setTimeout(() => {
+    if (session.child === child) killProcessTree(child, "SIGKILL");
+  }, 3000);
+  return session;
+}
+
+// Kill the whole process group when possible (spawned detached), falling back to
+// the single process if the group signal isn't available.
+function killProcessTree(child, signal) {
+  if (!child || child.killed) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    try { child.kill(signal); } catch { /* already gone */ }
+  }
 }
 
 function toStringList(value, limit = 12) {
@@ -2243,7 +2290,9 @@ function spawnCodex(session, message, { resume = false } = {}) {
   const child = spawn(CODEX_BIN, args, {
     cwd: session.workspace.path,
     env: { ...process.env, NO_COLOR: "1" },
-    stdio: ["ignore", "pipe", "pipe"]
+    stdio: ["ignore", "pipe", "pipe"],
+    // Own process group so a Stop can kill the harness AND any subprocess it spawns.
+    detached: true
   });
 
   let stdoutBuffer = "";
@@ -2367,7 +2416,9 @@ function spawnClaudeCode(session, message, { resume = false } = {}) {
   const child = spawn(CLAUDE_BIN, args, {
     cwd: session.workspace.path,
     env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
-    stdio: ["ignore", "pipe", "pipe"]
+    stdio: ["ignore", "pipe", "pipe"],
+    // Own process group so a Stop can kill the harness AND any subprocess it spawns.
+    detached: true
   });
 
   let stdoutBuffer = "";
@@ -2804,6 +2855,18 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, { ok: true, data: { sessionId: session.id, status: session.status }, error: null });
     } catch (error) {
       sendJson(res, error.statusCode || 500, { ok: false, data: null, error: { code: "SEND_BACK_FAILED", message: error.message, retryable: true } });
+    }
+    return;
+  }
+
+  const stopMatch = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/stop$/);
+  if (req.method === "POST" && stopMatch) {
+    try {
+      const id = decodeURIComponent(stopMatch[1]);
+      const session = stopSession(id);
+      sendJson(res, 200, { ok: true, data: { sessionId: session.id, status: session.status }, error: null });
+    } catch (error) {
+      sendJson(res, error.statusCode || 500, { ok: false, data: null, error: { code: "STOP_FAILED", message: error.message, retryable: true } });
     }
     return;
   }

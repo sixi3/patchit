@@ -74,6 +74,13 @@ actor LoupeClient {
         _ = try await postEnvelope(path: "/api/v1/prs/\(owner)/\(repo)/\(number)/reject", body: body, as: EmptyData.self)
     }
 
+    /// Stops a live agent run on the Mac. The daemon kills the harness process group
+    /// and emits a "stopped" done event over the session stream.
+    func stopSession(_ sessionId: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: [:])
+        _ = try await postEnvelope(path: "/api/v1/sessions/\(sessionId)/stop", body: body, as: EmptyData.self)
+    }
+
     private func postEnvelope<T: Decodable>(path: String, body: Data, as type: T.Type) async throws -> T {
         let env = try await request(path: path, method: "POST", body: body, as: APIEnvelope<T>.self)
         if let e = env.error { throw LoupeError.api(e) }

@@ -8,6 +8,8 @@ struct SessionView: View {
     let pairing: Pairing
     @State private var reviewRef: SessionStore.PRRef?
     @State private var openFacet: HandoffFacet?
+    @State private var stopConfirm: StopConfirm?
+    @State private var stopConfirmTask: Task<Void, Never>?
 
     /// Condensed "receipt" derived from the finished run — drives the bento dock.
     private var summary: HandoffSummary { HandoffSummary(store: store) }
@@ -45,6 +47,20 @@ struct SessionView: View {
             }
         }
         .animation(.snappy(duration: 0.28), value: showDock)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let stopConfirm {
+                StopConfirmBanner(
+                    confirm: stopConfirm,
+                    onCancelNow: { fireStop() },
+                    onAbandon: { abandonStop() }
+                )
+                .padding(.horizontal, LoupeSpace.screenInset)
+                .padding(.bottom, 8)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.snappy, value: stopConfirm?.id)
+        .onDisappear { stopConfirmTask?.cancel() }
         // The session is started ONCE by SessionsStore on dispatch and keeps
         // streaming in the background. Opening this view only displays it —
         // it must not re-dispatch or tear down the stream.
@@ -125,8 +141,10 @@ struct SessionView: View {
                 statusPill("Dispatching to your Mac…", system: "paperplane.fill", tint: .accent)
             }
         case .streaming:
+            stopButtonSurface
+        case .stopped:
             footerSurface {
-                statusPill("Agent is working…", system: "gearshape.2.fill", tint: .accent)
+                statusPill("Stopped.", system: "stop.circle.fill", tint: .textSecondary)
             }
         case .completed(let success):
             if summary.isPresent {
@@ -155,6 +173,59 @@ struct SessionView: View {
         }
     }
 
+    /// Live-run footer: a brand-colored glass capsule that arms the stop confirmation.
+    private var stopButtonSurface: some View {
+        VStack(spacing: 10) {
+            Button { armStop() } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "stop.fill")
+                    Text("Stop agent")
+                }
+                .font(LoupeFont.button)
+                .foregroundStyle(Color.accent)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+            }
+            .buttonStyle(.plain)
+            .loupeGlassCapsule(interactive: true)
+            .disabled(stopConfirm != nil)
+            .accessibilityLabel("Stop agent")
+        }
+        .padding(LoupeSpace.lg)
+    }
+
+    // MARK: Stop confirmation
+    // Mirrors the dispatch banner: arming raises a countdown; expiry or "Cancel Now"
+    // propagates the stop, the close button abandons it and keeps the agent running.
+
+    private func armStop() {
+        let confirm = StopConfirm()
+        stopConfirmTask?.cancel()
+        stopConfirm = confirm
+        stopConfirmTask = Task {
+            try? await Task.sleep(for: .seconds(confirm.duration))
+            guard !Task.isCancelled else { return }
+            await propagateStop()
+        }
+    }
+
+    private func fireStop() {
+        stopConfirmTask?.cancel()
+        stopConfirmTask = nil
+        Task { await propagateStop() }
+    }
+
+    private func abandonStop() {
+        stopConfirmTask?.cancel()
+        stopConfirmTask = nil
+        stopConfirm = nil
+    }
+
+    private func propagateStop() async {
+        stopConfirm = nil
+        await store.stop()
+    }
+
     private func footerSurface<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(spacing: 10) { content() }
             .padding(LoupeSpace.lg)
@@ -170,6 +241,74 @@ struct SessionView: View {
         .padding(12)
         .frame(maxWidth: .infinity)
         .background(RoundedRectangle(cornerRadius: LoupeRadius.control).fill(Color.chipFill))
+    }
+}
+
+// MARK: - Stop confirmation
+
+/// Transient state for the armed stop countdown.
+struct StopConfirm: Identifiable {
+    let id = UUID()
+    let startedAt = Date()
+    let duration: Int = 4
+}
+
+/// Bottom banner that mirrors `PendingDispatchBanner`: a grace countdown the user can
+/// accelerate with "Cancel Now" or dismiss with the close button to keep the agent running.
+private struct StopConfirmBanner: View {
+    let confirm: StopConfirm
+    var onCancelNow: () -> Void
+    var onAbandon: () -> Void
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let elapsed = max(0, context.date.timeIntervalSince(confirm.startedAt))
+            let progress = min(1, elapsed / Double(confirm.duration))
+            let remaining = max(0, Int(ceil(Double(confirm.duration) - elapsed)))
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Color.accent)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Stopping the agent")
+                            .font(LoupeFont.bodyMedium)
+                            .foregroundStyle(Color.textPrimary)
+                        Text("Stops in \(remaining)s")
+                            .font(LoupeFont.caption)
+                            .foregroundStyle(Color.textSecondary)
+                    }
+                    Spacer(minLength: 8)
+                    Button("Cancel Now") { onCancelNow() }
+                        .font(LoupeFont.caption)
+                        .foregroundStyle(Color.accent)
+                    Button(action: onAbandon) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color.textSecondary)
+                            .frame(width: 30, height: 30)
+                            .background(Circle().fill(Color.chipFill))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Keep agent running")
+                }
+
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.hairline)
+                        Capsule()
+                            .fill(Color.accent)
+                            .frame(width: proxy.size.width * progress)
+                    }
+                }
+                .frame(height: 4)
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: LoupeRadius.control).fill(Color.surface))
+            .overlay(RoundedRectangle(cornerRadius: LoupeRadius.control).stroke(Color.hairline, lineWidth: 1))
+            .shadow(color: .black.opacity(0.08), radius: 16, x: 0, y: 8)
+        }
     }
 }
 
