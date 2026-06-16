@@ -12,6 +12,7 @@ const { createModelRouter } = require("./daemon/models");
 const { createPullRequestService, parseRepoPair: parseRepoPairValue } = require("./daemon/prs");
 const { createSessionStateStore } = require("./daemon/sessions/state");
 const { createWorkspaceManager } = require("./daemon/workspaces");
+const security = require("./daemon/security");
 const codexHarness = require("./daemon/harnesses/codex");
 
 const HOST = "0.0.0.0";
@@ -61,8 +62,11 @@ When you are completely finished, end your FINAL message with a single fenced JS
 
 Use [] for empty lists and a 0–1 number for confidence. Emit the HANDOFF block only once, in the final message.`;
 
+// Prepend a capability-neutral injection guard (see daemon/security.js) so the
+// agent treats third-party text embedded in the dispatch (e.g. a GitHub issue
+// body) as a task description, not as instructions addressed to it.
 function withHandoffContract(message) {
-  return `${String(message || "").trim()}\n${HANDOFF_CONTRACT}`;
+  return `${security.INJECTION_GUARD}${String(message || "").trim()}\n${HANDOFF_CONTRACT}`;
 }
 
 // The handoff JSON rides inside the agent's final message. tryExtractHandoff()
@@ -621,12 +625,28 @@ function startTunnel() {
   const child = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${PORT}`], {
     stdio: ["ignore", "pipe", "pipe"]
   });
+  // A quick tunnel puts this Mac on the public internet behind one bearer token.
+  // Auto-close it after a bounded TTL so a tunnel left running overnight doesn't
+  // become a standing exposure. Override with LOUPE_TUNNEL_TTL_MS=0 to disable.
+  const tunnelTtlMs = Number(process.env.LOUPE_TUNNEL_TTL_MS ?? 4 * 60 * 60_000);
+  let tunnelExpiry = null;
   const onData = (buf) => {
     const text = buf.toString();
     const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
     if (match && !tunnelUrl) {
       tunnelUrl = match[0];
       console.log(`\nPublic tunnel ready: ${tunnelUrl}`);
+      console.log("\x1b[33m⚠  SECURITY: your Mac is now reachable from the public internet.\x1b[0m");
+      console.log("\x1b[33m   Anyone with the pairing token can dispatch agents that run with your full");
+      console.log("\x1b[33m   permissions. Keep the token secret and stop the tunnel when you're done.\x1b[0m");
+      if (tunnelTtlMs > 0) {
+        console.log(`   Tunnel auto-closes in ${Math.round(tunnelTtlMs / 60_000)} min.`);
+        tunnelExpiry = setTimeout(() => {
+          console.log("\nTunnel TTL reached — closing public tunnel. Pairing falls back to LAN.");
+          try { child.kill(); } catch { /* already gone */ }
+        }, tunnelTtlMs);
+        if (tunnelExpiry.unref) tunnelExpiry.unref();
+      }
       console.log("Scan to pair from any network:");
       renderQr(getPrimaryPairingUrl());
     }
@@ -634,6 +654,7 @@ function startTunnel() {
   child.stdout.on("data", onData);
   child.stderr.on("data", onData); // cloudflared logs the URL to stderr
   child.on("exit", (code) => {
+    if (tunnelExpiry) clearTimeout(tunnelExpiry);
     console.log(`cloudflared tunnel exited (code ${code}). Pairing falls back to LAN.`);
     tunnelUrl = null;
   });
@@ -685,18 +706,71 @@ function isPublicApi(pathname) {
   return pathname === "/api/pairing/status";
 }
 
-function requestAuthToken(req, url) {
-  return configManager.requestAuthToken(req, url);
+const isSsePath = security.isSsePath;
+
+function requestAuthToken(req, url, options) {
+  return configManager.requestAuthToken(req, url, options);
 }
 
 function isAuthorized(req, url) {
-  return configManager.isAuthorized(req, url, getClientIp);
+  const allowQueryToken = isSsePath(url.pathname);
+  return configManager.isAuthorized(req, url, getClientIp, { allowQueryToken });
 }
+
+// Failed-auth throttling (see daemon/security.js). A static bearer token over a
+// public tunnel invites brute force; lock an IP out after repeated failures.
+const authThrottle = security.createAuthThrottle({
+  max: Number(process.env.LOUPE_AUTH_FAIL_MAX || 10),
+  windowMs: Number(process.env.LOUPE_AUTH_FAIL_WINDOW_MS || 5 * 60_000),
+  lockMs: Number(process.env.LOUPE_AUTH_LOCK_MS || 15 * 60_000),
+  onLock: (ip, rec) => console.warn(`[auth] locked out ${ip} after ${rec.count} failed attempts`)
+});
+const authLockState = authThrottle.lockState;
+const recordAuthFailure = authThrottle.recordFailure;
+const clearAuthFailures = authThrottle.clearFailures;
 
 function getClientIp(req) {
   const forwarded = req.headers["x-forwarded-for"];
   if (forwarded) return forwarded.split(",")[0].trim();
   return req.socket.remoteAddress || "unknown";
+}
+
+// Append-only audit trail for security-relevant mutations (dispatch, PR
+// merge/reject). One JSON object per line under ~/.loupe/audit.log so a token
+// leak or unexpected run can be reconstructed after the fact. Records which
+// device token was used (by its registry id, never the secret) and where the
+// request came from, including whether it arrived via the public tunnel.
+const AUDIT_FILE = path.join(LOUPE_HOME, "audit.log");
+
+function auditDeviceId(req, url) {
+  try {
+    const token = requestAuthToken(req, url, { allowQueryToken: isSsePath(url.pathname) });
+    if (!token) return null;
+    const hash = configManager.hashToken(token);
+    const device = (configManager.config.devices || []).find((d) => d.tokenHash === hash);
+    return device ? device.id : "primary-token";
+  } catch { return null; }
+}
+
+function appendAudit(req, url, action, detail = {}) {
+  try {
+    const host = req.headers.host || "";
+    const viaTunnel = !!tunnelUrl && tunnelUrl.includes(host.replace(/:\d+$/, ""));
+    const entry = {
+      at: new Date().toISOString(),
+      action,
+      ip: getClientIp(req).replace(/^::ffff:/, ""),
+      device: auditDeviceId(req, url),
+      viaTunnel,
+      userAgent: req.headers["user-agent"] || "unknown",
+      ...detail
+    };
+    fs.mkdirSync(LOUPE_HOME, { recursive: true });
+    fs.appendFileSync(AUDIT_FILE, JSON.stringify(entry) + "\n");
+    try { fs.chmodSync(AUDIT_FILE, 0o600); } catch {}
+  } catch (error) {
+    console.warn(`[audit] failed to record ${action}: ${error.message}`);
+  }
 }
 
 function recordRequest(req) {
@@ -1038,6 +1112,10 @@ function markdownList(items, empty = "_None reported._") {
   return items?.length ? items.map((item) => `- ${item}`).join("\n") : empty;
 }
 
+// Flag changes to host-executed files (git hooks, CI, lifecycle scripts, …) so
+// the reviewer looks before merging. See daemon/security.js for the ruleset.
+const flagSensitiveChanges = security.flagSensitiveChanges;
+
 function formatPrBody(session, handoff, { branch, base, commitSha }) {
   const ticket = session.dispatch?.ticket;
   const plan = session.dispatch?.plan;
@@ -1053,7 +1131,11 @@ ${plan?.summary || "No approved plan summary was recorded."}
 
 ## Files changed (${handoff.files_changed.length})
 ${markdownList(handoff.files_changed)}
-
+${(session.sensitiveChanges && session.sensitiveChanges.length) ? `
+## ⚠️ Review carefully — host-executed files changed
+These files run on a machine (CI, git hook, install/build step) the next time the repo is used. Confirm the changes are intended before merging:
+${markdownList(session.sensitiveChanges.map((f) => `\`${f.path}\` — ${f.reason}`))}
+` : ""}
 ## Blueprint check
 ${deviation ? markdownList([
   deviation.filesTouchedNotPredicted.length ? `Touched but not predicted: ${deviation.filesTouchedNotPredicted.join(", ")}` : "No unpredicted files touched.",
@@ -2180,6 +2262,17 @@ async function finalizeBranch(session) {
       text: `Changed ${file.path}`
     });
   }
+  // Surface changes to host-executed files so the reviewer looks before merging.
+  const sensitiveChanges = flagSensitiveChanges(changedFiles);
+  session.sensitiveChanges = sensitiveChanges;
+  if (sensitiveChanges.length) {
+    addEvent(session, {
+      type: "security",
+      kind: "sensitive_changes",
+      files: sensitiveChanges,
+      text: `Review carefully: ${sensitiveChanges.length} host-executed file(s) changed (${sensitiveChanges.map((f) => f.reason).join(", ")}).`
+    });
+  }
   addEvent(session, { type: "handoff", kind: "ready", handoff });
   addEvent(session, { type: "deviations_computed", deviation });
 
@@ -2653,14 +2746,27 @@ function toolInputDiffPreview(toolName, input) {
   return empty;
 }
 
+// Static serving is confined to the PWA client asset surface (see
+// daemon/security.js) so the repo's source and docs aren't readable over a tunnel.
+const isAllowedStatic = security.isAllowedStatic;
+
 function serveStatic(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const requested = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
   const filePath = path.normalize(path.join(ROOT, requested));
 
-  if (!filePath.startsWith(ROOT)) {
+  // Confine to ROOT. The trailing separator is required: without it a sibling
+  // directory sharing the prefix (e.g. "<ROOT>-secret") would pass startsWith.
+  if (filePath !== ROOT && !filePath.startsWith(ROOT + path.sep)) {
     res.writeHead(403);
     res.end("Forbidden");
+    return;
+  }
+
+  const relPath = path.relative(ROOT, filePath);
+  if (!isAllowedStatic(relPath)) {
+    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Not found");
     return;
   }
 
@@ -2694,13 +2800,27 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (url.pathname.startsWith("/api/") && !isPublicApi(url.pathname) && !isAuthorized(req, url)) {
-    sendJson(res, 401, {
-      ok: false,
-      authRequired: true,
-      error: "Loupe is not paired with this browser. Open the pairing URL printed by the Mac daemon."
-    });
-    return;
+  if (url.pathname.startsWith("/api/") && !isPublicApi(url.pathname)) {
+    const clientIp = getClientIp(req).replace(/^::ffff:/, "");
+    const lock = authLockState(clientIp);
+    if (lock.locked) {
+      res.writeHead(429, {
+        "content-type": "application/json; charset=utf-8",
+        "retry-after": String(Math.ceil(lock.retryAfterMs / 1000))
+      });
+      res.end(JSON.stringify({ ok: false, error: "Too many failed attempts. Try again later." }));
+      return;
+    }
+    if (!isAuthorized(req, url)) {
+      recordAuthFailure(clientIp);
+      sendJson(res, 401, {
+        ok: false,
+        authRequired: true,
+        error: "Loupe is not paired with this browser. Open the pairing URL printed by the Mac daemon."
+      });
+      return;
+    }
+    clearAuthFailures(clientIp);
   }
 
   if (req.method === "GET" && url.pathname === "/api/pairing/status") {
@@ -2811,6 +2931,7 @@ const server = http.createServer(async (req, res) => {
       const number = Number(prActionMatch[3]);
       const action = prActionMatch[4];
       const body = JSON.parse(await readBody(req) || "{}");
+      appendAudit(req, url, `pr_${action}`, { repo: `${owner}/${repo}`, prNumber: number });
       if (action === "review") {
         const event = body.event === "REQUEST_CHANGES" ? "REQUEST_CHANGES" : "APPROVE";
         const review = await submitPullRequestReview(owner, repo, number, { event, body: body.body || (event === "APPROVE" ? "Approved from Loupe." : "Changes requested from Loupe.") });
@@ -3146,6 +3267,13 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const session = createSession(message, body.workspaceId, body.harness, body.dispatch);
+      appendAudit(req, url, "dispatch", {
+        sessionId: session.id,
+        harness: session.harnessId,
+        workspace: session.workspace?.path,
+        ticket: session.dispatch?.ticket ? `${session.dispatch.ticket.repo}#${session.dispatch.ticket.number}` : null,
+        messagePreview: message.slice(0, 120)
+      });
       sendJson(res, 200, {
         ok: true,
         sessionId: session.id,

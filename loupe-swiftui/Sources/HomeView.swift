@@ -12,6 +12,7 @@ struct HomeView: View {
     @State private var showSessions = false
     @State private var homeTab: HomeTab = .tickets
     @State private var reviewPR: SessionStore.PRRef?
+    @State private var isReconciling = false
 
     /// Hide tickets whose dispatch is in flight or done (failed ones return).
     private var items: [InboxItem] {
@@ -201,16 +202,20 @@ struct HomeView: View {
             let haptic = UIImpactFeedbackGenerator(style: .light)
             haptic.prepare()
             haptic.impactOccurred()
+            isReconciling = true
             await store.refresh()
             if let pairing = store.pairing {
                 await sessions.hydrate(pairing: pairing, force: true)
             }
+            isReconciling = false
         }
     }
 
     @ViewBuilder
     private var ticketsContent: some View {
-        if case .loading = store.phase {
+        if isReconciling {
+            fetchingTicketsView
+        } else if case .loading = store.phase {
             fetchingTicketsView
         } else if case .idle = store.phase, store.isPaired {
             fetchingTicketsView
@@ -224,16 +229,17 @@ struct HomeView: View {
                        message: "Fetched tickets are already in progress or have a successful agent run.",
                        systemImage: "checkmark.circle.fill")
                 .padding(.horizontal, LoupeSpace.screenInset)
-        }
-        LazyVStack(spacing: LoupeSpace.ticketGap) {
-            ForEach(items) { item in
-                TicketCard(
-                    item: item,
-                    isRefreshingBlueprint: store.isRefreshingBlueprint(item),
-                    onDispatch: { dispatch(item, harness: $0) },
-                    onRefreshBlueprint: { store.refreshBlueprint(item) }
-                )
-                .transition(.flyToPill)
+        } else {
+            LazyVStack(spacing: LoupeSpace.ticketGap) {
+                ForEach(items) { item in
+                    TicketCard(
+                        item: item,
+                        isRefreshingBlueprint: store.isRefreshingBlueprint(item),
+                        onDispatch: { dispatch(item, harness: $0) },
+                        onRefreshBlueprint: { store.refreshBlueprint(item) }
+                    )
+                    .transition(.flyToPill)
+                }
             }
         }
     }
@@ -254,7 +260,9 @@ struct HomeView: View {
 
     @ViewBuilder
     private var prsContent: some View {
-        if case .loading = store.phase {
+        if isReconciling {
+            fetchingTicketsView
+        } else if case .loading = store.phase {
             fetchingTicketsView
         } else if case .idle = store.phase, store.isPaired {
             fetchingTicketsView
