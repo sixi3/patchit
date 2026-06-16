@@ -34,6 +34,7 @@ final class SessionStore: Identifiable {
     private(set) var prRef: PRRef?
 
     private var streamTask: Task<Void, Never>?
+    private var reconcileTask: Task<Void, Never>?
     private var hasStarted = false
     private var lastError: String?
 
@@ -71,6 +72,8 @@ final class SessionStore: Identifiable {
         if !isRunning {
             streamTask?.cancel()
             streamTask = nil
+            reconcileTask?.cancel()
+            reconcileTask = nil
         }
     }
 
@@ -126,7 +129,9 @@ final class SessionStore: Identifiable {
 
     private func listen(client: LoupeClient, sessionId: String, since: Int = 0) {
         streamTask?.cancel()
+        startReconciliation(client: client, sessionId: sessionId)
         streamTask = Task { [weak self] in
+            var sawDone = false
             do {
                 for try await event in client.events(sessionId: sessionId, since: since) {
                     guard let self else { return }
@@ -143,15 +148,26 @@ final class SessionStore: Identifiable {
                         }
                     }
                     if event.type == "done" {
+                        sawDone = true
                         if event.status == "completed" {
                             self.phase = .completed(success: true)
                         } else {
                             self.phase = .failed(self.lastError ?? "The agent run did not complete.")
                         }
+                        self.reconcileTask?.cancel()
+                        self.reconcileTask = nil
                     }
                 }
+                guard !sawDone else { return }
+                await self?.reconcileSnapshot(client: client, sessionId: sessionId)
             } catch {
-                self?.phase = .failed((error as? LocalizedError)?.errorDescription ?? "\(error)")
+                guard let self else { return }
+                let reconciled = await self.reconcileSnapshot(client: client, sessionId: sessionId)
+                if !reconciled {
+                    self.phase = .failed((error as? LocalizedError)?.errorDescription ?? "\(error)")
+                    self.reconcileTask?.cancel()
+                    self.reconcileTask = nil
+                }
             }
         }
     }
@@ -159,6 +175,32 @@ final class SessionStore: Identifiable {
     func cancel() {
         streamTask?.cancel()
         streamTask = nil
+        reconcileTask?.cancel()
+        reconcileTask = nil
+    }
+
+    private func startReconciliation(client: LoupeClient, sessionId: String) {
+        reconcileTask?.cancel()
+        reconcileTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard let self, self.isRunning else { return }
+                _ = await self.reconcileSnapshot(client: client, sessionId: sessionId)
+            }
+        }
+    }
+
+    @discardableResult
+    private func reconcileSnapshot(client: LoupeClient, sessionId: String) async -> Bool {
+        do {
+            guard let snapshot = try await client.sessions().first(where: { $0.id == sessionId }) else {
+                return false
+            }
+            apply(snapshot: snapshot)
+            return true
+        } catch {
+            return false
+        }
     }
 
     private static func prRef(from events: [SessionEvent]) -> PRRef? {

@@ -113,7 +113,7 @@ struct SessionView: View {
                 }
                 .padding(.top, LoupeSpace.xl)
                 .padding(.horizontal, LoupeSpace.xl)
-                .padding(.bottom, LoupeSpace.xxl)
+                .padding(.bottom, showDock ? 120 : LoupeSpace.xxl)
             }
             .onAppear {
                 proseEvents = store.events.filter(\.isNativeAgentProse)
