@@ -96,7 +96,21 @@ function createConfigManager({ loupeHome, configFile, githubOAuthClientId }) {
     saveConfig();
   }
 
-  function requestAuthToken(req, url) {
+  // Constant-time string comparison. Guards the token-equality check against
+  // timing side-channels. Length mismatch short-circuits (lengths are not secret).
+  function safeEqual(a, b) {
+    const ab = Buffer.from(String(a || ""), "utf8");
+    const bb = Buffer.from(String(b || ""), "utf8");
+    if (ab.length !== bb.length) return false;
+    return crypto.timingSafeEqual(ab, bb);
+  }
+
+  // The auth token may arrive in a header (preferred) or — only when the caller
+  // explicitly allows it — in the `?token=` query string. Query-string tokens
+  // leak into proxy/tunnel access logs and browser history, so they are accepted
+  // ONLY for read-only SSE streams that cannot set request headers (browser
+  // EventSource). Every mutating endpoint requires the header form.
+  function requestAuthToken(req, url, { allowQueryToken = false } = {}) {
     const headerToken = req.headers["x-loupe-token"];
     if (typeof headerToken === "string" && headerToken.trim()) return headerToken.trim();
 
@@ -105,14 +119,17 @@ function createConfigManager({ loupeHome, configFile, githubOAuthClientId }) {
       return auth.slice(7).trim();
     }
 
-    const queryToken = url.searchParams.get("token");
-    return queryToken ? queryToken.trim() : "";
+    if (allowQueryToken) {
+      const queryToken = url.searchParams.get("token");
+      return queryToken ? queryToken.trim() : "";
+    }
+    return "";
   }
 
-  function isAuthorized(req, url, getClientIp) {
-    const token = requestAuthToken(req, url);
+  function isAuthorized(req, url, getClientIp, { allowQueryToken = false } = {}) {
+    const token = requestAuthToken(req, url, { allowQueryToken });
     if (!token) return false;
-    if (config.apiToken && token === config.apiToken) return true;
+    if (config.apiToken && safeEqual(token, config.apiToken)) return true;
     const tokenHash = hashToken(token);
     const device = (config.devices || []).find((item) => item.tokenHash === tokenHash && !item.revokedAt);
     if (!device) return false;
