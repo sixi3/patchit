@@ -10,6 +10,7 @@ final class SessionStore: Identifiable {
         case dispatching
         case streaming
         case completed(success: Bool)
+        case stopped
         case failed(String)
     }
 
@@ -131,6 +132,7 @@ final class SessionStore: Identifiable {
         case .dispatching: return "Starting…"
         case .streaming:   return "Working…"
         case .completed(let ok): return ok ? "Completed" : "Finished with issues"
+        case .stopped:     return "Stopped"
         case .failed:      return "Failed"
         }
     }
@@ -141,6 +143,7 @@ final class SessionStore: Identifiable {
         switch phase {
         case .dispatching, .streaming: return .running
         case .completed(let ok):       return ok ? .completed : .failed
+        case .stopped:                 return .failed
         case .failed:                  return .failed
         }
     }
@@ -192,6 +195,8 @@ final class SessionStore: Identifiable {
                         sawDone = true
                         if event.status == "completed" {
                             self.phase = .completed(success: true)
+                        } else if event.status == "stopped" {
+                            self.phase = .stopped
                         } else {
                             self.phase = .failed(self.lastError ?? "The agent run did not complete.")
                         }
@@ -213,11 +218,29 @@ final class SessionStore: Identifiable {
         }
     }
 
+    /// Tears down the local stream without touching the agent on the Mac.
     func cancel() {
         streamTask?.cancel()
         streamTask = nil
         reconcileTask?.cancel()
         reconcileTask = nil
+    }
+
+    /// User-initiated stop. Asks the daemon to kill the harness process group, then
+    /// optimistically settles to `.stopped` so the UI reacts instantly. The streamed
+    /// "stopped" done event reconciles this if the agent was already mid-shutdown.
+    func stop() async {
+        guard isRunning, let sessionId else { return }
+        phase = .stopped
+        cancel()
+        do {
+            try await LoupeClient(pairing: pairing).stopSession(sessionId)
+        } catch {
+            // The kill request failed (e.g. transient network). Resume listening so
+            // the real run state isn't misrepresented as stopped.
+            phase = .streaming
+            reconnectIfRunning()
+        }
     }
 
     private func startReconciliation(client: LoupeClient, sessionId: String) {
@@ -256,10 +279,14 @@ final class SessionStore: Identifiable {
     private static func phase(from snapshot: SessionSnapshot) -> Phase {
         if snapshot.status == "running" { return .streaming }
         if let done = snapshot.events.last(where: { $0.type == "done" }) {
-            return done.status == "completed"
-                ? .completed(success: true)
-                : .failed(snapshot.events.last(where: { $0.type == "error" })?.text ?? "The agent run did not complete.")
+            switch done.status {
+            case "completed": return .completed(success: true)
+            case "stopped":   return .stopped
+            default:
+                return .failed(snapshot.events.last(where: { $0.type == "error" })?.text ?? "The agent run did not complete.")
+            }
         }
+        if snapshot.status == "stopped" { return .stopped }
         if snapshot.status == "completed" { return .completed(success: snapshot.exitCode == 0 || snapshot.exitCode == nil) }
         if snapshot.status == "failed" || snapshot.status == "interrupted" {
             return .failed(snapshot.events.last(where: { $0.type == "error" })?.text ?? "The agent run did not complete.")
