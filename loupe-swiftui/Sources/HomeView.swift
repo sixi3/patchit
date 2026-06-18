@@ -21,12 +21,7 @@ struct HomeView: View {
     private var onlineAgents: [Agent] { store.onlineAgents }
 
     var body: some View {
-        ZStack {
-            Color.canvas.ignoresSafeArea()
-
-            homeTabPager
-                .loupeStickyTopBar { stickyHeader }
-        }
+        homeContent
         .task {
             if store.isPaired { await store.refresh() }
         }
@@ -46,7 +41,7 @@ struct HomeView: View {
         .alert("Pair your Mac first", isPresented: $notPairedAlert) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("You're viewing sample tickets. Pair a Mac to dispatch to a real agent.")
+            Text("Pair a Mac to fetch tickets and dispatch to a real agent.")
         }
         .sheet(isPresented: $showWorkstationPicker) {
             workstationSheet
@@ -62,6 +57,63 @@ struct HomeView: View {
             }
         }
         .onDisappear { pendingDispatchTask?.cancel() }
+    }
+
+    // MARK: Home shell (native bottom tabs on iOS 26, top tabs as fallback)
+    @ViewBuilder
+    private var homeContent: some View {
+        if #available(iOS 26.0, *) {
+            nativeTabHome
+        } else {
+            legacyTabHome
+        }
+    }
+
+    /// iOS 26: native Liquid Glass tab bar pinned to the bottom. It minimizes
+    /// (slides toward the bottom) on scroll-down and restores on scroll-up via
+    /// `tabBarMinimizeBehavior`. A horizontal swipe still pages between tabs.
+    @available(iOS 26.0, *)
+    private var nativeTabHome: some View {
+        TabView(selection: $homeTab) {
+            Tab(HomeTab.tickets.title, systemImage: HomeTab.tickets.icon, value: HomeTab.tickets) {
+                homeTabPage { ticketsContent }
+                    .loupeStickyTopBar { topHeaderRow }
+            }
+            Tab(HomeTab.prs.title, systemImage: HomeTab.prs.icon, value: HomeTab.prs) {
+                homeTabPage { prsContent }
+                    .loupeStickyTopBar { topHeaderRow }
+            }
+        }
+        .tabBarMinimizeBehavior(.onScrollDown)
+        .tint(Color.accent)
+        .background(Color.canvas.ignoresSafeArea())
+        .simultaneousGesture(swipePagingGesture)
+    }
+
+    /// Pre-iOS 26 fallback: the original top glass tab switcher + horizontal pager.
+    private var legacyTabHome: some View {
+        ZStack {
+            Color.canvas.ignoresSafeArea()
+            homeTabPager
+                .loupeStickyTopBar { stickyHeader }
+        }
+    }
+
+    /// Horizontal swipe drives the same `homeTab` selection the native bar exposes,
+    /// so users keep swipe-paging between Tickets and PRs alongside the bottom bar.
+    private var swipePagingGesture: some Gesture {
+        DragGesture(minimumDistance: 24)
+            .onEnded { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                guard abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
+                let tabs = HomeTab.allCases
+                guard let idx = tabs.firstIndex(of: homeTab) else { return }
+                let next = dx < 0 ? idx + 1 : idx - 1
+                guard tabs.indices.contains(next) else { return }
+                withAnimation(.snappy(duration: 0.3)) { homeTab = tabs[next] }
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }
     }
 
     private func dispatch(_ item: InboxItem, harness: Agent) {
@@ -140,8 +192,11 @@ struct HomeView: View {
                 content()
             }
             .padding(.bottom, LoupeSpace.xxl)
+            .frame(maxWidth: .infinity)
+            .background(Color.canvas)
         }
         .frame(maxHeight: .infinity)
+        .background(Color.canvas)
         .refreshable {
             let haptic = UIImpactFeedbackGenerator(style: .light)
             haptic.prepare()
@@ -155,31 +210,55 @@ struct HomeView: View {
 
     @ViewBuilder
     private var ticketsContent: some View {
-        if case .loading = store.phase, items.isEmpty {
-            statePanel(title: "Loading inbox",
-                       message: "Fetching assigned GitHub issues from your Mac.",
-                       systemImage: "arrow.clockwise")
-                .padding(.horizontal, LoupeSpace.screenInset)
-        } else if case .loaded = store.phase, items.isEmpty {
+        if case .loading = store.phase {
+            fetchingTicketsView
+        } else if case .idle = store.phase, store.isPaired {
+            fetchingTicketsView
+        } else if case .loaded = store.phase, store.items.isEmpty {
             statePanel(title: "Inbox is clear",
                        message: "Assigned GitHub issues will appear here when they are ready to dispatch.",
                        systemImage: "checkmark.circle.fill")
                 .padding(.horizontal, LoupeSpace.screenInset)
+        } else if case .loaded = store.phase, items.isEmpty {
+            statePanel(title: "No actionable tickets",
+                       message: "Fetched tickets are already in progress or have a successful agent run.",
+                       systemImage: "checkmark.circle.fill")
+                .padding(.horizontal, LoupeSpace.screenInset)
         }
-        ForEach(items) { item in
-            TicketCard(
-                item: item,
-                isRefreshingBlueprint: store.isRefreshingBlueprint(item),
-                onDispatch: { dispatch(item, harness: $0) },
-                onRefreshBlueprint: { store.refreshBlueprint(item) }
-            )
-            .transition(.flyToPill)
+        LazyVStack(spacing: LoupeSpace.ticketGap) {
+            ForEach(items) { item in
+                TicketCard(
+                    item: item,
+                    isRefreshingBlueprint: store.isRefreshingBlueprint(item),
+                    onDispatch: { dispatch(item, harness: $0) },
+                    onRefreshBlueprint: { store.refreshBlueprint(item) }
+                )
+                .transition(.flyToPill)
+            }
         }
+    }
+
+    private var fetchingTicketsView: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.large)
+                .tint(Color.accent)
+            Text("Fetching your tickets")
+                .font(LoupeFont.bodyMedium)
+                .foregroundStyle(Color.textPrimary)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 420)
+        .padding(.horizontal, LoupeSpace.screenInset)
     }
 
     @ViewBuilder
     private var prsContent: some View {
-        if store.prs.isEmpty {
+        if case .loading = store.phase {
+            fetchingTicketsView
+        } else if case .idle = store.phase, store.isPaired {
+            fetchingTicketsView
+        } else if store.prs.isEmpty {
             statePanel(title: "No PRs to review",
                        message: "Pull requests where your review is requested will appear here.",
                        systemImage: "arrow.triangle.pull")
@@ -245,7 +324,7 @@ struct HomeView: View {
         .overlay(RoundedRectangle(cornerRadius: LoupeRadius.control).stroke(Color.hairline, lineWidth: 1))
     }
 
-    // MARK: Sticky header (user row + tabs)
+    // MARK: Sticky header (legacy: user row + top tab switcher)
     private var stickyHeader: some View {
         VStack(spacing: 0) {
             userInfoRow
@@ -254,6 +333,13 @@ struct HomeView: View {
                 .padding(.horizontal, LoupeSpace.screenInset)
                 .padding(.vertical, LoupeSpace.xl)
         }
+    }
+
+    // MARK: Top header (native bottom-tab mode: user row only, tabs live at the bottom)
+    private var topHeaderRow: some View {
+        userInfoRow
+            .padding(.horizontal, LoupeSpace.screenInset)
+            .padding(.vertical, LoupeSpace.sm)
     }
 
     // MARK: User info / workstation selector

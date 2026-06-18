@@ -32,6 +32,7 @@ final class SessionStore: Identifiable {
     private(set) var sessionId: String?
     private(set) var branch: DispatchResponse.Branch?
     private(set) var prRef: PRRef?
+    private(set) var metrics: SessionMetrics?
 
     private var streamTask: Task<Void, Never>?
     private var reconcileTask: Task<Void, Never>?
@@ -55,6 +56,7 @@ final class SessionStore: Identifiable {
         self.events = snapshot.events
         self.sessionId = snapshot.id
         self.branch = snapshot.branch
+        self.metrics = snapshot.metrics
         self.prRef = Self.prRef(from: snapshot.events)
         self.phase = Self.phase(from: snapshot)
         self.hasStarted = true
@@ -65,6 +67,7 @@ final class SessionStore: Identifiable {
         events = Self.mergedEvents(existing: events, incoming: snapshot.events)
         sessionId = snapshot.id
         branch = snapshot.branch ?? branch
+        metrics = snapshot.metrics ?? metrics
         prRef = Self.prRef(from: events)
         phase = Self.phase(from: snapshot)
         lastError = events.last(where: { $0.type == "error" })?.text
@@ -82,6 +85,44 @@ final class SessionStore: Identifiable {
 
     /// Live (still working) vs. settled (completed/failed) — drives the pill count.
     var isRunning: Bool { phase == .dispatching || phase == .streaming }
+
+    /// Whether the source GitHub issue should be suppressed from the inbox.
+    /// Running sessions leave the card while work is active; successful runs or
+    /// PR-ready sessions stay hidden as fixed. Failed or inconclusive runs let
+    /// the ticket return.
+    var hidesSourceIssueInInbox: Bool {
+        if isRunning || prRef != nil { return true }
+        if case .completed(let success) = phase, success { return true }
+        return false
+    }
+
+    var elapsedDuration: TimeInterval {
+        if let durationMs = metrics?.durationMs {
+            return max(0, durationMs / 1000)
+        }
+        if isRunning {
+            return max(0, Date().timeIntervalSince(startedAt))
+        }
+        if let doneAt = events.last(where: { $0.type == "done" }).flatMap({ Self.date(from: $0.at) }) {
+            return max(0, doneAt.timeIntervalSince(startedAt))
+        }
+        return max(0, Date().timeIntervalSince(startedAt))
+    }
+
+    var displayCostUsd: Double? {
+        if let cost = metrics?.costUsd { return cost }
+        if let resultCost = events.reversed().compactMap({ $0.totalCostUsd ?? $0.costUsd }).first {
+            return resultCost
+        }
+        return nil
+    }
+
+    var displayCostLabel: String? {
+        if let cost = displayCostUsd {
+            return String(format: "$%.2f", cost)
+        }
+        return item.costStripLabel
+    }
 
     /// Short status for the sessions list row.
     var statusLabel: String {

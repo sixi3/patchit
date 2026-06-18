@@ -213,6 +213,8 @@ enum HomeTab: String, CaseIterable, Identifiable, Hashable {
     case tickets, prs
     var id: String { rawValue }
     var title: String { self == .tickets ? "Tickets" : "PRs" }
+    /// SF Symbol shown in the native iOS 26 bottom tab bar.
+    var icon: String { self == .tickets ? "tray.full" : "arrow.triangle.pull" }
 }
 
 // Liquid-glass segmented switcher with a sliding selection pill.

@@ -17,8 +17,8 @@ actor LoupeClient {
         self.host = pairing.host
         self.token = pairing.token
         let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 15
-        cfg.timeoutIntervalForResource = 20
+        cfg.timeoutIntervalForRequest = 45
+        cfg.timeoutIntervalForResource = 60
         cfg.waitsForConnectivity = false
         self.session = URLSession(configuration: cfg)
 
@@ -108,6 +108,42 @@ actor LoupeClient {
                         if let event = try? decoder.decode(SessionEvent.self, from: data) {
                             continuation.yield(event)
                             if event.type == "done" { continuation.finish(); return }
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// SSE stream of the inbox. The daemon pushes a full InboxPayload whenever the
+    /// inbox changes (poll tick found new/updated tickets, or a blueprint finished).
+    nonisolated func inboxStream() -> AsyncThrowingStream<InboxPayload, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard let url = URL(string: "/api/v1/inbox/stream", relativeTo: host) else {
+                        throw LoupeError.badURL
+                    }
+                    var req = URLRequest(url: url)
+                    req.setValue(token, forHTTPHeaderField: "X-Loupe-Token")
+                    req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    req.timeoutInterval = .infinity
+
+                    let (bytes, response) = try await streamSession.bytes(for: req)
+                    if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                        throw LoupeError.http(http.statusCode)
+                    }
+                    let decoder = JSONDecoder()
+                    for try await line in bytes.lines {
+                        guard line.hasPrefix("data:") else { continue }   // skip ": ping" heartbeats
+                        let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                        guard !json.isEmpty, let data = json.data(using: .utf8) else { continue }
+                        if let payload = try? decoder.decode(InboxPayload.self, from: data) {
+                            continuation.yield(payload)
                         }
                     }
                     continuation.finish()

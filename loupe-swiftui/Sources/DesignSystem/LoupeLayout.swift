@@ -15,6 +15,7 @@ enum LoupeSpace {
     /// Horizontal inset for the user-info row / inbox header (Figma: 8–12px).
     static let screenInset: CGFloat = 12
     /// Vertical gap between ticket cards (cards are full-bleed horizontally).
+    static let ticketGap: CGFloat = 8
     static let cardGap: CGFloat = 8
 }
 

@@ -1,10 +1,18 @@
 const http = require("http");
-const https = require("https");
 const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
+const { createConfigManager } = require("./daemon/config");
+const fsUtils = require("./daemon/filesystem");
+const { githubApiRequest, githubGraphqlRequest, githubOAuthPost, githubRequest } = require("./daemon/github");
+const { readBody, sendJson } = require("./daemon/http");
+const { createModelRouter } = require("./daemon/models");
+const { createPullRequestService, parseRepoPair: parseRepoPairValue } = require("./daemon/prs");
+const { createSessionStateStore } = require("./daemon/sessions/state");
+const { createWorkspaceManager } = require("./daemon/workspaces");
+const codexHarness = require("./daemon/harnesses/codex");
 
 const HOST = "0.0.0.0";
 const PORT = Number(process.env.PORT || 4173);
@@ -70,12 +78,92 @@ function stripHandoffBlock(text) {
 const sessions = new Map();
 const plans = new Map();
 const recentRequests = [];
-const workspaces = getConfiguredWorkspaces();
+const pullRequests = createPullRequestService({
+  getGithubAccessToken: () => getGithubAccessToken(),
+  sessions
+});
+const sessionStateStore = createSessionStateStore({
+  loupeHome: LOUPE_HOME,
+  stateFile: STATE_FILE,
+  sessions,
+  plans
+});
+const configManager = createConfigManager({
+  loupeHome: LOUPE_HOME,
+  configFile: CONFIG_FILE,
+  githubOAuthClientId: GITHUB_OAUTH_CLIENT_ID
+});
+const modelRouter = createModelRouter({ config: configManager.config });
+const workspaceManager = createWorkspaceManager({
+  root: ROOT,
+  workspaceStore: WORKSPACE_STORE,
+  hasGithubAuth: () => !!getGithubAccessToken()
+});
+const workspaces = workspaceManager.workspaces;
 const harnessRegistry = buildHarnessRegistry();
-let config = loadConfig();
+const config = configManager.config;
 ensureAlphaAuth();
 // Cache the GitHub inbox briefly so the PWA can re-render without hammering the API.
-const inboxCache = { fetchedAt: 0, ttlMs: 60_000, payload: null };
+const inboxCache = { fetchedAt: 0, ttlMs: 60_000, payload: null, emptyStreak: 0 };
+
+// Live inbox push. Clients hold an SSE connection to /api/v1/inbox/stream and
+// the daemon broadcasts a fresh payload whenever the inbox changes (a poll tick
+// found new/updated tickets, or a blueprint finished). The poll loop only runs
+// while at least one client is connected, so we never burn GitHub rate limit
+// when nobody is watching.
+const inboxClients = new Set();
+const INBOX_POLL_MS = Number(process.env.LOUPE_INBOX_POLL_MS || 30_000);
+let inboxPollTimer = null;
+
+function broadcastInbox(payload) {
+  if (!payload) return;
+  const frame = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const res of inboxClients) {
+    try { res.write(frame); } catch { inboxClients.delete(res); }
+  }
+}
+
+// Cheap structural signature: changes when a ticket is added/removed/updated or
+// a blueprint's status flips. Used to avoid broadcasting unchanged payloads.
+function inboxSignature(payload) {
+  if (!payload) return "";
+  const sig = (list) => (list || [])
+    .map((t) => `${t.id}:${t.updatedAt}:${t.blueprint?.status || t.blueprint?.outcome || ""}`)
+    .sort()
+    .join("|");
+  return `${sig(payload.assigned)}#${sig(payload.reviews)}`;
+}
+
+// Rebuild the inbox and push to subscribers if anything changed.
+async function refreshAndBroadcastInbox() {
+  const token = getGithubAccessToken();
+  if (!token) return;
+  const before = inboxSignature(inboxCache.payload);
+  try {
+    const payload = await buildInbox(token);
+    if (inboxSignature(payload) !== before) broadcastInbox(payload);
+  } catch {
+    // Transient GitHub failure; keep the last-known-good and try again next tick.
+  }
+}
+
+// Call when something we know changed the inbox (e.g. a blueprint finished).
+// Invalidate the TTL marker, and push live if anyone is watching — otherwise
+// stay quiet and let the next poll/request rebuild lazily.
+function onInboxMaybeChanged() {
+  inboxCache.fetchedAt = 0;
+  if (inboxClients.size > 0) refreshAndBroadcastInbox();
+}
+
+function startInboxPolling() {
+  if (inboxPollTimer) return;
+  inboxPollTimer = setInterval(() => {
+    if (inboxClients.size === 0) return;   // nobody watching → stay idle
+    refreshAndBroadcastInbox();
+  }, INBOX_POLL_MS);
+  if (inboxPollTimer.unref) inboxPollTimer.unref();
+}
+
 const githubOAuthFlows = new Map();
 const blueprintJobs = new Map();
 const blueprintQueue = [];
@@ -144,158 +232,44 @@ function defaultHarnessId() {
 // ~/.loupe/config.json holds BYOK credentials. Token never leaves the daemon
 // process; the PWA only learns whether one is configured.
 
-function loadConfig() {
-  try {
-    return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
-  } catch {
-    return {};
-  }
-}
-
 function saveConfig() {
-  fs.mkdirSync(LOUPE_HOME, { recursive: true });
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
-  // Restrict to user-only — these are secrets.
-  try { fs.chmodSync(CONFIG_FILE, 0o600); } catch {}
+  return configManager.saveConfig();
 }
 
 function serializeSession(session) {
-  return {
-    id: session.id,
-    harnessId: session.harnessId,
-    message: session.message,
-    workspace: session.workspace,
-    dispatch: session.dispatch || null,
-    status: session.child ? "running" : session.status,
-    events: session.events || [],
-    nextEventId: session.nextEventId || 0,
-    startedAt: session.startedAt,
-    exitCode: session.exitCode ?? null,
-    codexThreadId: session.codexThreadId || null,
-    claudeSessionId: session.claudeSessionId || null,
-    branch: session.branch || null,
-    agentMessages: session.agentMessages || [],
-    handoff: session.handoff || null,
-    deviation: session.deviation || null
-  };
+  return sessionStateStore.serializeSession(session);
 }
 
 function persistState() {
-  try {
-    fs.mkdirSync(LOUPE_HOME, { recursive: true });
-    const payload = {
-      version: 1,
-      savedAt: new Date().toISOString(),
-      sessions: [...sessions.values()].map(serializeSession).slice(-100),
-      plans: [...plans.values()].slice(-200)
-    };
-    const tmp = `${STATE_FILE}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2));
-    fs.renameSync(tmp, STATE_FILE);
-    try { fs.chmodSync(STATE_FILE, 0o600); } catch {}
-  } catch (error) {
-    console.warn(`Could not persist Loupe state: ${error.message}`);
-  }
+  return sessionStateStore.persistState();
 }
 
 function hydrateState() {
-  let payload = null;
-  try {
-    payload = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-  } catch {
-    return;
-  }
-
-  for (const plan of payload.plans || []) {
-    if (plan?.id) plans.set(plan.id, plan);
-  }
-
-  for (const saved of payload.sessions || []) {
-    if (!saved?.id) continue;
-    const events = Array.isArray(saved.events) ? saved.events : [];
-    const maxEventId = events.reduce((max, event) => Math.max(max, Number(event.id) || 0), -1);
-    sessions.set(saved.id, {
-      id: saved.id,
-      harnessId: saved.harnessId,
-      message: saved.message || "",
-      workspace: saved.workspace || null,
-      dispatch: saved.dispatch || null,
-      status: saved.status === "running" ? "interrupted" : saved.status || "completed",
-      events,
-      clients: new Set(),
-      nextEventId: Math.max(Number(saved.nextEventId) || 0, maxEventId + 1),
-      startedAt: saved.startedAt || new Date().toISOString(),
-      exitCode: saved.exitCode ?? null,
-      codexThreadId: saved.codexThreadId || null,
-      claudeSessionId: saved.claudeSessionId || null,
-      branch: saved.branch || null,
-      agentMessages: Array.isArray(saved.agentMessages) ? saved.agentMessages : [],
-      handoff: saved.handoff || null,
-      deviation: saved.deviation || null,
-      child: null
-    });
-  }
+  return sessionStateStore.hydrateState();
 }
 
 function createSecretToken() {
-  return crypto.randomBytes(32).toString("base64url");
+  return configManager.createSecretToken();
 }
 
 function hashToken(token) {
-  return crypto.createHash("sha256").update(String(token || "")).digest("hex");
+  return configManager.hashToken(token);
 }
 
 function ensureDeviceRegistry() {
-  if (!Array.isArray(config.devices)) config.devices = [];
-  if (config.apiToken && !config.devices.some((device) => device.tokenHash === hashToken(config.apiToken))) {
-    config.devices.push({
-      id: `device-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-      name: "Paired browser",
-      tokenHash: hashToken(config.apiToken),
-      createdAt: new Date().toISOString(),
-      lastSeenAt: null,
-      lastIp: null,
-      revokedAt: null
-    });
-    saveConfig();
-  }
+  return configManager.ensureDeviceRegistry();
 }
 
 function ensureAlphaAuth() {
-  if (!config.apiToken) {
-    config.apiToken = createSecretToken();
-    saveConfig();
-  }
-  ensureDeviceRegistry();
+  return configManager.ensureAlphaAuth();
 }
 
 function tokenPreview(token) {
-  if (!token) return null;
-  return `${token.slice(0, 6)}...${token.slice(-4)}`;
+  return configManager.tokenPreview(token);
 }
 
 function configSummary() {
-  const githubAuth = config.github || {};
-  return {
-    auth: {
-      enabled: true,
-      tokenPreview: tokenPreview(config.apiToken)
-    },
-    github: {
-      configured: !!getGithubAccessToken(),
-      login: githubAuth.login || config.githubLogin || null,
-      avatarUrl: githubAuth.avatarUrl || null,
-      authType: githubAuth.accessToken ? "oauth" : config.githubToken ? "pat" : null,
-      oauthClientConfigured: !!GITHUB_OAUTH_CLIENT_ID
-    },
-    devices: (config.devices || []).filter((device) => !device.revokedAt).map((device) => ({
-      id: device.id,
-      name: device.name,
-      createdAt: device.createdAt,
-      lastSeenAt: device.lastSeenAt,
-      lastIp: device.lastIp
-    }))
-  };
+  return configManager.configSummary();
 }
 
 // ---------- Git ----------
@@ -303,98 +277,23 @@ function configSummary() {
 // enough to do on every inbox refresh; no caching.
 
 function workspaceRepoBinding(workspace) {
-  try {
-    const result = spawnSync("git", ["-C", workspace.path, "remote", "get-url", "origin"], { timeout: 1500 });
-    if (result.status !== 0) return null;
-    const url = result.stdout.toString().trim();
-    return parseGithubRemote(url);
-  } catch {
-    return null;
-  }
-}
-
-function parseGithubRemote(remote) {
-  if (!remote) return null;
-  // Handle ssh (git@github.com:owner/repo.git) and https (https://github.com/owner/repo.git)
-  const ssh = remote.match(/^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/i);
-  if (ssh) return { host: "github.com", owner: ssh[1], repo: ssh[2] };
-  const https = remote.match(/^https?:\/\/(?:[^@]+@)?github\.com\/([^/]+)\/(.+?)(?:\.git)?\/?$/i);
-  if (https) return { host: "github.com", owner: https[1], repo: https[2] };
-  return null;
+  return workspaceManager.workspaceRepoBinding(workspace);
 }
 
 function listWorkspaceBindings() {
-  return workspaces
-    .map((workspace) => {
-      const binding = workspaceRepoBinding(workspace);
-      return binding ? { workspaceId: workspace.id, workspacePath: workspace.path, ...binding } : null;
-    })
-    .filter(Boolean);
+  return workspaceManager.listWorkspaceBindings();
 }
 
 function repoHeadSha(workspace) {
-  try {
-    const result = spawnSync("git", ["-C", workspace.path, "rev-parse", "HEAD"], { timeout: 1500, encoding: "utf8" });
-    if (result.status === 0) return result.stdout.trim();
-  } catch {}
-  return "no-git-head";
+  return workspaceManager.repoHeadSha(workspace);
 }
 
 function workspaceReadiness(workspace) {
-  const blockers = [];
-  const warnings = [];
-  const pathExists = fs.existsSync(workspace.path);
-  let isGitRepo = false;
-  let branch = null;
-  let dirty = false;
-  let binding = null;
-
-  if (!pathExists) {
-    blockers.push("Workspace folder no longer exists.");
-  } else {
-    const inside = spawnSync("git", ["-C", workspace.path, "rev-parse", "--is-inside-work-tree"], { timeout: 1500, encoding: "utf8" });
-    isGitRepo = inside.status === 0 && inside.stdout.trim() === "true";
-    if (!isGitRepo) {
-      blockers.push("Workspace is not a git repository.");
-    } else {
-      binding = workspaceRepoBinding(workspace);
-      if (!binding) blockers.push("Workspace is not bound to a GitHub remote.");
-
-      const head = spawnSync("git", ["-C", workspace.path, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 1500, encoding: "utf8" });
-      if (head.status === 0) branch = head.stdout.trim();
-      else warnings.push("Could not read current branch.");
-
-      const status = spawnSync("git", ["-C", workspace.path, "status", "--porcelain"], { timeout: 2000, encoding: "utf8" });
-      if (status.status === 0) {
-        dirty = !!status.stdout.trim();
-        if (dirty) blockers.push("Workspace has uncommitted changes.");
-      } else {
-        blockers.push("Could not read git status.");
-      }
-    }
-  }
-
-  if (!getGithubAccessToken()) {
-    warnings.push("GitHub is not connected; Loupe can push with git credentials but cannot create draft PRs via API.");
-  }
-
-  return {
-    workspaceId: workspace.id,
-    workspacePath: workspace.path,
-    ready: blockers.length === 0,
-    canDispatch: blockers.length === 0,
-    pathExists,
-    isGitRepo,
-    branch,
-    dirty,
-    binding,
-    blockers,
-    warnings
-  };
+  return workspaceManager.workspaceReadiness(workspace);
 }
 
 function listWorkspaceReadiness() {
-  return workspaces.map(workspaceReadiness);
+  return workspaceManager.listWorkspaceReadiness();
 }
 
 // ---------- GitHub API ----------
@@ -403,113 +302,19 @@ function listWorkspaceReadiness() {
 // requests in a second call. Enough for the demo inbox.
 
 function getGithubAccessToken() {
-  return config.github?.accessToken || config.githubToken || "";
+  return configManager.getGithubAccessToken();
 }
 
 function saveGithubOAuth(tokenPayload, viewer) {
-  config.github = {
-    accessToken: tokenPayload.access_token,
-    tokenType: tokenPayload.token_type || "bearer",
-    scope: tokenPayload.scope || GITHUB_OAUTH_SCOPES,
-    login: viewer?.login || null,
-    avatarUrl: viewer?.avatar_url || null,
-    connectedAt: new Date().toISOString()
-  };
-  delete config.githubToken;
-  delete config.githubLogin;
-  saveConfig();
+  configManager.saveGithubOAuth(tokenPayload, viewer, GITHUB_OAUTH_SCOPES);
   inboxCache.fetchedAt = 0;
   inboxCache.payload = null;
 }
 
 function clearGithubAuth() {
-  delete config.github;
-  delete config.githubToken;
-  delete config.githubLogin;
-  saveConfig();
+  configManager.clearGithubAuth();
   inboxCache.fetchedAt = 0;
   inboxCache.payload = null;
-}
-
-function githubRequest(pathname, token) {
-  return githubApiRequest("GET", pathname, token);
-}
-
-function githubApiRequest(method, pathname, token, payload = null) {
-  const body = payload ? JSON.stringify(payload) : "";
-  return new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: "api.github.com",
-      path: pathname,
-      method,
-      headers: {
-        "user-agent": "loupe-mac-daemon",
-        accept: "application/vnd.github+json",
-        "x-github-api-version": "2022-11-28",
-        authorization: `Bearer ${token}`,
-        ...(body ? { "content-type": "application/json", "content-length": Buffer.byteLength(body) } : {})
-      }
-    }, (res) => {
-      let body = "";
-      res.on("data", (chunk) => { body += chunk; });
-      res.on("end", () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          try { resolve(JSON.parse(body)); } catch (error) { reject(error); }
-        } else {
-          const err = new Error(`GitHub ${res.statusCode}: ${body.slice(0, 300)}`);
-          err.statusCode = res.statusCode;
-          reject(err);
-        }
-      });
-    });
-    req.on("error", reject);
-    req.setTimeout(15_000, () => req.destroy(new Error("GitHub request timeout")));
-    if (body) req.write(body);
-    req.end();
-  });
-}
-
-function githubGraphqlRequest(token, query, variables = {}) {
-  return githubApiRequest("POST", "/graphql", token, { query, variables });
-}
-
-function githubOAuthPost(pathname, params) {
-  const body = new URLSearchParams(params).toString();
-  return new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: "github.com",
-      path: pathname,
-      method: "POST",
-      headers: {
-        "user-agent": "loupe-mac-daemon",
-        accept: "application/json",
-        "content-type": "application/x-www-form-urlencoded",
-        "content-length": Buffer.byteLength(body)
-      }
-    }, (res) => {
-      let responseBody = "";
-      res.on("data", (chunk) => { responseBody += chunk; });
-      res.on("end", () => {
-        let parsed = {};
-        try { parsed = JSON.parse(responseBody); } catch {
-          const query = new URLSearchParams(responseBody);
-          parsed = Object.fromEntries(query.entries());
-        }
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          resolve(parsed);
-        } else {
-          const err = new Error(parsed.error_description || parsed.error || `GitHub OAuth ${res.statusCode}`);
-          err.statusCode = res.statusCode;
-          err.payload = parsed;
-          reject(err);
-        }
-      });
-    });
-    req.on("error", reject);
-    req.setTimeout(15_000, () => req.destroy(new Error("GitHub OAuth request timeout")));
-    req.write(body);
-    req.end();
-  });
 }
 
 function cleanupGithubOAuthFlows() {
@@ -520,12 +325,25 @@ function cleanupGithubOAuthFlows() {
 }
 
 async function fetchGithubInbox(token) {
-  // Two queries, one assignee one review-requested. Search API supports both.
-  const [assignedIssues, reviewRequests, viewer] = await Promise.all([
+  // Assigned issues come from TWO sources unioned together:
+  //   - REST /issues?filter=assigned is immediately consistent, so a brand-new
+  //     assignment shows up right away (search/issues lags behind its index).
+  //   - search/issues keeps cross-repo coverage for repos where you're assigned
+  //     but not an owner/collaborator/org member (REST /issues omits those).
+  // Reviews stay on search (no clean cross-repo REST equivalent).
+  const [assignedSearch, assignedRest, reviewRequests, viewer] = await Promise.all([
     githubRequest(`/search/issues?q=${encodeURIComponent("assignee:@me is:open archived:false")}&per_page=30&sort=updated`, token),
+    githubRequest("/issues?filter=assigned&state=open&per_page=50&sort=updated", token),
     githubRequest(`/search/issues?q=${encodeURIComponent("is:pr is:open review-requested:@me archived:false")}&per_page=30&sort=updated`, token),
     githubRequest("/user", token)
   ]);
+
+  // Union by id; the REST entry wins on conflict (freshest, immediately consistent).
+  const assignedById = new Map();
+  for (const item of (assignedSearch.items || [])) assignedById.set(item.id, item);
+  for (const item of (Array.isArray(assignedRest) ? assignedRest : [])) assignedById.set(item.id, item);
+  const assignedItems = [...assignedById.values()]
+    .sort((a, b) => Date.parse(b.updated_at || 0) - Date.parse(a.updated_at || 0));
 
   // Persist login on first fetch so we can show it in config summary.
   if (viewer?.login && config.github?.accessToken && config.github.login !== viewer.login) {
@@ -538,13 +356,31 @@ async function fetchGithubInbox(token) {
   }
 
   const bindings = listWorkspaceBindings();
+
+  // Per-build memoization. The same workspace is referenced by many tickets, and
+  // each readiness/head-sha probe spawns several blocking `git` processes
+  // (notably `git status --porcelain`). Computing once per unique workspace turns
+  // ~60 git spawns into ~5 and is the difference between a ~7s and a sub-second inbox.
+  const readinessMemo = new Map();   // workspace.id -> readiness
+  const headShaMemo = new Map();     // workspace.path -> HEAD sha
+  function readinessFor(workspace) {
+    let r = readinessMemo.get(workspace.id);
+    if (!r) { r = workspaceReadiness(workspace); readinessMemo.set(workspace.id, r); }
+    return r;
+  }
+  function headShaFor(workspace) {
+    let s = headShaMemo.get(workspace.path);
+    if (s === undefined) { s = repoHeadSha(workspace); headShaMemo.set(workspace.path, s); }
+    return s;
+  }
+
   function bindingFor(repoFullName) {
     if (!repoFullName) return null;
     const [owner, repo] = repoFullName.split("/");
     const matches = bindings.filter((b) => b.owner.toLowerCase() === owner.toLowerCase() && b.repo.toLowerCase() === repo.toLowerCase());
     return matches.find((b) => {
       const workspace = workspaces.find((w) => w.id === b.workspaceId);
-      return workspace && workspaceReadiness(workspace).canDispatch;
+      return workspace && readinessFor(workspace).canDispatch;
     }) || matches[0] || null;
   }
 
@@ -576,7 +412,7 @@ async function fetchGithubInbox(token) {
       // decide to refresh — generation is expensive and should be deliberate.
       const cached = readCachedBlueprintForTicket(ticket, workspace);
       if (cached) {
-        annotateStaleness(cached, workspace);
+        annotateStaleness(cached, workspace, headShaFor(workspace));
         ticket.blueprint = cached;
       } else {
         ticket.blueprint = enqueueBlueprintForTicket(ticket, workspace);
@@ -585,7 +421,7 @@ async function fetchGithubInbox(token) {
     return ticket;
   }
 
-  const assigned = (assignedIssues.items || []).map((item) => normalize(item, "issue"));
+  const assigned = assignedItems.map((item) => normalize(item, "issue"));
   const reviews = (reviewRequests.items || []).map((item) => normalize(item, "review"));
 
   return {
@@ -594,6 +430,45 @@ async function fetchGithubInbox(token) {
     assigned,
     reviews
   };
+}
+
+// Build the inbox with stale-while-revalidate semantics. Concurrent callers
+// coalesce onto one in-flight build. The cache (inboxCache.payload) is the
+// last-known-good list, served as a fallback so a transient GitHub blip never
+// blanks the app.
+function buildInbox(token) {
+  if (!inboxCache.refreshPromise) {
+    const prev = inboxCache.payload;
+    inboxCache.refreshPromise = fetchGithubInbox(token)
+      .then((payload) => {
+        // Guard against a transient empty response wiping a good inbox: only
+        // accept "assigned went to empty" once it persists across two builds.
+        const wasNonEmpty = (prev?.assigned?.length || 0) > 0;
+        const nowEmpty = (payload?.assigned?.length || 0) === 0;
+        if (wasNonEmpty && nowEmpty) {
+          inboxCache.emptyStreak = (inboxCache.emptyStreak || 0) + 1;
+          if (inboxCache.emptyStreak < 2) return prev;   // keep last-known-good
+        } else {
+          inboxCache.emptyStreak = 0;
+        }
+        inboxCache.fetchedAt = Date.now();
+        inboxCache.payload = payload;
+        return payload;
+      })
+      .finally(() => { inboxCache.refreshPromise = null; });
+  }
+  return inboxCache.refreshPromise;
+}
+
+// Serve the freshest inbox we can, falling back to the last-known-good payload
+// if the live build fails outright.
+async function getInboxPayload(token) {
+  try {
+    return await buildInbox(token);
+  } catch (error) {
+    if (inboxCache.payload) return inboxCache.payload;
+    throw error;
+  }
 }
 
 function normalizeIssuePayload(issue, repoFullName) {
@@ -670,215 +545,23 @@ async function createGithubIssue({ repoFullName, title, body = "", assignSelf = 
 }
 
 function parseRepoPair(owner, repo) {
-  const cleanOwner = String(owner || "").trim();
-  const cleanRepo = String(repo || "").trim();
-  if (!/^[A-Za-z0-9_.-]+$/.test(cleanOwner) || !/^[A-Za-z0-9_.-]+$/.test(cleanRepo)) {
-    const error = new Error("Invalid GitHub repository.");
-    error.statusCode = 400;
-    throw error;
-  }
-  return { owner: cleanOwner, repo: cleanRepo };
-}
-
-function findSessionForPr({ owner, repo, number, branch }) {
-  const repoFullName = `${owner}/${repo}`;
-  const candidates = [...sessions.values()].reverse();
-  return candidates.find((session) => {
-    if (branch && session.branch?.name === branch && session.branch?.repo === repoFullName) return true;
-    return (session.events || []).some((event) =>
-      event.type === "branch" &&
-      event.kind === "pr_ready" &&
-      event.prNumber === number &&
-      event.repo === repoFullName
-    );
-  }) || null;
-}
-
-function parsePrHandoff(body) {
-  const text = String(body || "");
-  const section = (title) => {
-    const pattern = new RegExp(`## ${title}\\n([\\s\\S]*?)(?=\\n## |\\n---|$)`, "i");
-    return (text.match(pattern)?.[1] || "").trim();
-  };
-  const list = (value) => value
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^[-*]\s*/, "").trim())
-    .filter((line) => line && !/^_none/i.test(line));
-  const confidenceText = section("Confidence");
-  return {
-    tldr: section("What I did"),
-    why: section("Why"),
-    approach: section("Approach"),
-    files_changed: list(section("Files changed(?: \\([^)]*\\))?")),
-    verify: list(section("I want you to double-check")),
-    tests_run: list(section("Verified")),
-    tests_not_run: list(section("Not verified")),
-    confidence: confidenceText ? Number(confidenceText.replace(/[^0-9.]/g, "")) / 100 : null
-  };
-}
-
-function normalizeCheckState({ pr, combinedStatus, checkRuns }) {
-  const states = [];
-  if (combinedStatus?.state) states.push(combinedStatus.state);
-  for (const run of checkRuns?.check_runs || []) {
-    states.push(run.conclusion || run.status);
-  }
-  if (!states.length) return "unknown";
-  if (states.some((state) => ["failure", "error", "cancelled", "timed_out", "action_required"].includes(state))) return "failing";
-  if (states.some((state) => ["pending", "queued", "in_progress", "waiting", "requested"].includes(state))) return "pending";
-  if (states.every((state) => ["success", "neutral", "skipped", "completed"].includes(state))) return "passing";
-  return pr.mergeable_state || "unknown";
+  return parseRepoPairValue(owner, repo);
 }
 
 async function fetchPullRequestDetail(owner, repo, number) {
-  const token = getGithubAccessToken();
-  if (!token) {
-    const error = new Error("GitHub is not connected.");
-    error.statusCode = 401;
-    throw error;
-  }
-  const safe = parseRepoPair(owner, repo);
-  const prNumber = Number(number);
-  if (!Number.isInteger(prNumber) || prNumber <= 0) {
-    const error = new Error("Invalid pull request number.");
-    error.statusCode = 400;
-    throw error;
-  }
-  const repoPath = `/repos/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.repo)}`;
-  const [pr, files, reviews] = await Promise.all([
-    githubApiRequest("GET", `${repoPath}/pulls/${prNumber}`, token),
-    githubApiRequest("GET", `${repoPath}/pulls/${prNumber}/files?per_page=100`, token),
-    githubApiRequest("GET", `${repoPath}/pulls/${prNumber}/reviews?per_page=50`, token)
-  ]);
-  const [combinedStatus, checkRuns] = await Promise.all([
-    githubApiRequest("GET", `${repoPath}/commits/${encodeURIComponent(pr.head.sha)}/status`, token).catch(() => null),
-    githubApiRequest("GET", `${repoPath}/commits/${encodeURIComponent(pr.head.sha)}/check-runs?per_page=50`, token).catch(() => null)
-  ]);
-  const session = findSessionForPr({ owner: safe.owner, repo: safe.repo, number: prNumber, branch: pr.head.ref });
-  const handoff = session?.handoff || parsePrHandoff(pr.body || "");
-  return {
-    repo: `${safe.owner}/${safe.repo}`,
-    owner: safe.owner,
-    repoName: safe.repo,
-    number: pr.number,
-    title: pr.title,
-    body: pr.body || "",
-    url: pr.html_url,
-    state: pr.state,
-    draft: !!pr.draft,
-    merged: !!pr.merged,
-    mergeable: pr.mergeable,
-    mergeableState: pr.mergeable_state || null,
-    author: pr.user?.login || null,
-    base: { ref: pr.base.ref, sha: pr.base.sha },
-    head: { ref: pr.head.ref, sha: pr.head.sha },
-    additions: pr.additions,
-    deletions: pr.deletions,
-    changedFiles: pr.changed_files,
-    checkState: normalizeCheckState({ pr, combinedStatus, checkRuns }),
-    checks: {
-      combinedState: combinedStatus?.state || null,
-      runs: (checkRuns?.check_runs || []).map((run) => ({
-        id: run.id,
-        name: run.name,
-        status: run.status,
-        conclusion: run.conclusion,
-        url: run.html_url
-      }))
-    },
-    files: (files || []).map((file) => ({
-      filename: file.filename,
-      status: file.status,
-      additions: file.additions,
-      deletions: file.deletions,
-      changes: file.changes,
-      patch: file.patch || "",
-      blobUrl: file.blob_url
-    })),
-    reviews: (reviews || []).map((review) => ({
-      id: review.id,
-      user: review.user?.login || null,
-      state: review.state,
-      body: review.body || "",
-      submittedAt: review.submitted_at,
-      url: review.html_url
-    })),
-    loupe: {
-      sessionId: session?.id || null,
-      harness: session?.harnessId || null,
-      handoff,
-      deviation: session?.deviation || null
-    }
-  };
+  return pullRequests.fetchPullRequestDetail(owner, repo, number);
 }
 
-async function submitPullRequestReview(owner, repo, number, { event, body }) {
-  const token = getGithubAccessToken();
-  if (!token) {
-    const error = new Error("GitHub is not connected.");
-    error.statusCode = 401;
-    throw error;
-  }
-  const safe = parseRepoPair(owner, repo);
-  return githubApiRequest("POST", `/repos/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.repo)}/pulls/${Number(number)}/reviews`, token, {
-    event,
-    body: body || ""
-  });
+async function submitPullRequestReview(owner, repo, number, review) {
+  return pullRequests.submitPullRequestReview(owner, repo, number, review);
 }
 
-async function mergePullRequest(owner, repo, number, { commitTitle, commitMessage } = {}) {
-  const token = getGithubAccessToken();
-  if (!token) {
-    const error = new Error("GitHub is not connected.");
-    error.statusCode = 401;
-    throw error;
-  }
-  const safe = parseRepoPair(owner, repo);
-  const repoPath = `/repos/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.repo)}`;
-  const prNumber = Number(number);
-  const pr = await githubApiRequest("GET", `${repoPath}/pulls/${prNumber}`, token);
-  if (pr.draft) {
-    await markPullRequestReadyForReview(token, pr.node_id);
-  }
-  return githubApiRequest("PUT", `${repoPath}/pulls/${prNumber}/merge`, token, {
-    merge_method: "squash",
-    ...(commitTitle ? { commit_title: commitTitle } : {}),
-    ...(commitMessage ? { commit_message: commitMessage } : {})
-  });
-}
-
-async function markPullRequestReadyForReview(token, pullRequestId) {
-  if (!pullRequestId) {
-    const error = new Error("GitHub did not return a pull request id.");
-    error.statusCode = 502;
-    throw error;
-  }
-  const result = await githubGraphqlRequest(token, `
-    mutation MarkPullRequestReadyForReview($id: ID!) {
-      markPullRequestReadyForReview(input: { pullRequestId: $id }) {
-        pullRequest { number isDraft url }
-      }
-    }
-  `, { id: pullRequestId });
-  if (Array.isArray(result.errors) && result.errors.length) {
-    const error = new Error(result.errors.map((item) => item.message).filter(Boolean).join("; ") || "GitHub could not mark the pull request ready for review.");
-    error.statusCode = 422;
-    throw error;
-  }
-  return result.data?.markPullRequestReadyForReview?.pullRequest || null;
+async function mergePullRequest(owner, repo, number, options) {
+  return pullRequests.mergePullRequest(owner, repo, number, options);
 }
 
 async function closePullRequest(owner, repo, number) {
-  const token = getGithubAccessToken();
-  if (!token) {
-    const error = new Error("GitHub is not connected.");
-    error.statusCode = 401;
-    throw error;
-  }
-  const safe = parseRepoPair(owner, repo);
-  return githubApiRequest("PATCH", `/repos/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.repo)}/pulls/${Number(number)}`, token, {
-    state: "closed"
-  });
+  return pullRequests.closePullRequest(owner, repo, number);
 }
 
 const mimeTypes = {
@@ -970,200 +653,32 @@ function renderQr(text) {
   }
 }
 
-function getConfiguredWorkspaces() {
-  const configured = (process.env.LOUPE_WORKSPACES || "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const saved = readSavedWorkspacePaths();
-  const candidates = configured.length ? configured : [ROOT, ...saved];
-  const unique = [...new Set(candidates.map((item) => path.resolve(item)))];
-
-  return unique.map((workspacePath, index) => workspaceFromPath(workspacePath, index));
-}
-
-function readSavedWorkspacePaths() {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(WORKSPACE_STORE, "utf8"));
-    return Array.isArray(parsed.workspaces) ? parsed.workspaces : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveWorkspaces() {
-  fs.writeFileSync(
-    WORKSPACE_STORE,
-    JSON.stringify({ workspaces: workspaces.map((workspace) => workspace.path) }, null, 2)
-  );
-}
-
-function workspaceFromPath(workspacePath, index) {
-  const resolved = path.resolve(workspacePath);
-  return {
-    id: `workspace-${index}`,
-    name: path.basename(resolved) || resolved,
-    path: resolved
-  };
-}
-
 function addWorkspace(workspacePath) {
-  const resolved = path.resolve(workspacePath);
-  const existing = workspaces.find((workspace) => workspace.path === resolved);
-  if (existing) return existing;
-
-  const workspace = workspaceFromPath(resolved, workspaces.length);
-  workspaces.push(workspace);
-  saveWorkspaces();
-  return workspace;
+  return workspaceManager.addWorkspace(workspacePath);
 }
 
 function resolveWorkspace(id) {
-  return workspaces.find((workspace) => workspace.id === id) || workspaces[0];
+  return workspaceManager.resolveWorkspace(id);
 }
 
 function getFsRoots() {
-  return [
-    { name: "Home", path: os.homedir() },
-    { name: "Documents", path: path.join(os.homedir(), "Documents") },
-    { name: "Desktop", path: path.join(os.homedir(), "Desktop") },
-    { name: "Downloads", path: path.join(os.homedir(), "Downloads") },
-    { name: "Volumes", path: "/Volumes" },
-    { name: "Macintosh HD", path: "/" }
-  ];
-}
-
-function listJsonlFiles(dirPath, files = []) {
-  let entries = [];
-  try {
-    entries = fs.readdirSync(dirPath, { withFileTypes: true });
-  } catch {
-    return files;
-  }
-
-  for (const entry of entries) {
-    const entryPath = path.join(dirPath, entry.name);
-    if (entry.isDirectory()) {
-      listJsonlFiles(entryPath, files);
-    } else if (entry.name.endsWith(".jsonl")) {
-      files.push(entryPath);
-    }
-  }
-
-  return files;
-}
-
-function readLastRateLimitSnapshot(filePath) {
-  let content = "";
-  let fd = null;
-  try {
-    const stat = fs.statSync(filePath);
-    const bytesToRead = Math.min(stat.size, 1024 * 1024);
-    const buffer = Buffer.alloc(bytesToRead);
-    fd = fs.openSync(filePath, "r");
-    fs.readSync(fd, buffer, 0, bytesToRead, stat.size - bytesToRead);
-    content = buffer.toString("utf8");
-  } catch {
-    return null;
-  } finally {
-    if (fd !== null) fs.closeSync(fd);
-  }
-
-  const lines = content.trim().split(/\r?\n/);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index];
-    if (!line.includes("\"rate_limits\"")) continue;
-
-    try {
-      const parsed = JSON.parse(line);
-      const rateLimits = parsed.payload?.rate_limits;
-      if (rateLimits) {
-        return {
-          capturedAt: parsed.timestamp || null,
-          rateLimits
-        };
-      }
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
+  return fsUtils.getFsRoots();
 }
 
 function getCodexUsage() {
-  return getUsageSnapshot(CODEX_SESSIONS_DIR);
+  return fsUtils.getUsageSnapshot(CODEX_SESSIONS_DIR);
 }
 
 function getClaudeUsage() {
-  return getUsageSnapshot(CLAUDE_PROJECTS_DIR);
-}
-
-function getUsageSnapshot(rootDir) {
-  const files = listJsonlFiles(rootDir)
-    .map((filePath) => {
-      try {
-        return { path: filePath, mtimeMs: fs.statSync(filePath).mtimeMs };
-      } catch {
-        return null;
-      }
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.mtimeMs - a.mtimeMs)
-    .slice(0, 40);
-
-  for (const file of files) {
-    const snapshot = readLastRateLimitSnapshot(file.path);
-    if (snapshot) return snapshot;
-  }
-
-  return null;
+  return fsUtils.getUsageSnapshot(CLAUDE_PROJECTS_DIR);
 }
 
 function cleanFolderName(name) {
-  const cleaned = String(name || "").trim();
-  if (!cleaned || cleaned === "." || cleaned === ".." || cleaned.includes("/") || cleaned.includes("\0")) {
-    throw new Error("Use a simple folder name without slashes.");
-  }
-  return cleaned;
+  return fsUtils.cleanFolderName(name);
 }
 
 function listFolders(dirPath) {
-  const resolved = path.resolve(String(dirPath || os.homedir()));
-  const entries = fs.readdirSync(resolved, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-    .map((entry) => ({
-      name: entry.name,
-      path: path.join(resolved, entry.name)
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  return {
-    path: resolved,
-    parent: path.dirname(resolved) === resolved ? null : path.dirname(resolved),
-    roots: getFsRoots(),
-    entries
-  };
-}
-
-function sendJson(res, status, payload) {
-  if (res.writableEnded) return;
-  let body;
-  try {
-    body = JSON.stringify(payload);
-  } catch (error) {
-    status = 500;
-    body = JSON.stringify({ ok: false, error: `Response could not be serialized: ${error.message}` });
-  }
-  if (res.headersSent) {
-    res.end(body);
-    return;
-  }
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "access-control-allow-origin": "*"
-  });
-  res.end(body);
+  return fsUtils.listFolders(dirPath);
 }
 
 function isPublicApi(pathname) {
@@ -1171,31 +686,11 @@ function isPublicApi(pathname) {
 }
 
 function requestAuthToken(req, url) {
-  const headerToken = req.headers["x-loupe-token"];
-  if (typeof headerToken === "string" && headerToken.trim()) return headerToken.trim();
-
-  const auth = req.headers.authorization;
-  if (typeof auth === "string" && auth.toLowerCase().startsWith("bearer ")) {
-    return auth.slice(7).trim();
-  }
-
-  // EventSource cannot set custom headers in browsers, so the SSE endpoint
-  // accepts the same token as a query param.
-  const queryToken = url.searchParams.get("token");
-  return queryToken ? queryToken.trim() : "";
+  return configManager.requestAuthToken(req, url);
 }
 
 function isAuthorized(req, url) {
-  const token = requestAuthToken(req, url);
-  if (!token) return false;
-  if (config.apiToken && token === config.apiToken) return true;
-  const tokenHash = hashToken(token);
-  const device = (config.devices || []).find((item) => item.tokenHash === tokenHash && !item.revokedAt);
-  if (!device) return false;
-  device.lastSeenAt = new Date().toISOString();
-  device.lastIp = getClientIp(req).replace(/^::ffff:/, "");
-  saveConfig();
-  return true;
+  return configManager.isAuthorized(req, url, getClientIp);
 }
 
 function getClientIp(req) {
@@ -1215,21 +710,6 @@ function recordRequest(req) {
   recentRequests.unshift(event);
   recentRequests.splice(12);
   console.log(`${event.at} ${event.ip} ${event.method} ${event.path}`);
-}
-
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.on("data", (chunk) => {
-      body += chunk;
-      if (body.length > 64_000) {
-        reject(new Error("Request body too large"));
-        req.destroy();
-      }
-    });
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
 }
 
 function addEvent(session, event) {
@@ -1410,18 +890,20 @@ function tryExtractHandoff(text, session) {
 
 function noteAgentMessage(session, text) {
   const trimmed = String(text || "").trim();
-  if (!trimmed) return;
-  if (session.agentMessages.at(-1) === trimmed) return;
+  if (!trimmed) return null;
+  if (session.agentMessages.at(-1) === trimmed) return null;
   session.agentMessages.push(trimmed);
   const handoff = tryExtractHandoff(trimmed, session);
   if (handoff) {
     session.handoff = handoff;
     addEvent(session, { type: "handoff", kind: "captured", handoff });
   }
+  return handoff;
 }
 
 function emitAgentProse(session, event, rawText) {
-  noteAgentMessage(session, rawText);
+  const handoff = noteAgentMessage(session, rawText);
+  if (handoff) return;
   const display = stripHandoffBlock(rawText);
   if (!display) return;
   const displayKey = display.replace(/\s+/g, " ").trim();
@@ -1875,13 +1357,13 @@ function pumpBlueprintQueue() {
         job.status = "done";
         job.blueprint = publicBlueprint(blueprint);
         job.updatedAt = new Date().toISOString();
-        inboxCache.fetchedAt = 0;
+        onInboxMaybeChanged();
       })
       .catch((error) => {
         job.status = "failed";
         job.error = error?.message || String(error);
         job.updatedAt = new Date().toISOString();
-        inboxCache.fetchedAt = 0;
+        onInboxMaybeChanged();
         console.warn(`Background Blueprint failed for ${job.ticket?.repo || "repo"}#${job.ticket?.number || "ticket"}: ${job.error}`);
       })
       .finally(() => {
@@ -1894,28 +1376,50 @@ function pumpBlueprintQueue() {
 // File-level staleness: a Blueprint is "stale" only if a file it actually
 // references changed between its generation HEAD and the current HEAD. Unrelated
 // commits do NOT invalidate it. This sets a badge; it never regenerates.
-function annotateStaleness(blueprint, workspace) {
+// Memoizes the staleness diff. Result only changes when HEAD moves (currentSha)
+// or the Blueprint is regenerated (genSha), so the key fully determines the
+// answer — safe to cache across tickets and across inbox refreshes.
+const staleDiffCache = new Map(); // key -> string[] changed files (subset of queried files)
+
+function annotateStaleness(blueprint, workspace, currentShaOverride) {
   blueprint.stale = false;
   blueprint.staleFiles = [];
   const genSha = blueprint.repoSha;
   if (!genSha) return;
-  let currentSha;
-  try { currentSha = repoHeadSha(workspace); } catch { return; }
+  let currentSha = currentShaOverride;
+  if (currentSha === undefined) {
+    try { currentSha = repoHeadSha(workspace); } catch { return; }
+  }
   if (!currentSha || genSha === currentSha) return;
   const files = (blueprint.files || []).map((f) => f.path).filter(Boolean);
   if (!files.length) return;
-  try {
-    const out = spawnSync("git", ["-C", workspace.path, "diff", "--name-only", genSha, currentSha],
-      { timeout: 3000, encoding: "utf8" });
-    if (out.status !== 0) return;
-    const changed = new Set(out.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean));
-    const hit = files.filter((f) => changed.has(f));
-    if (hit.length) {
-      blueprint.stale = true;
-      blueprint.staleFiles = hit;
-      blueprint.staleReason = `${hit.length} tracked file${hit.length > 1 ? "s" : ""} changed since this Blueprint was generated.`;
+
+  const cacheKey = `${workspace.path}|${genSha}|${currentSha}|${files.join("|")}`;
+  let hit = staleDiffCache.get(cacheKey);
+  if (hit === undefined) {
+    try {
+      // Scope the diff to just this Blueprint's files via pathspec. Diffing the
+      // whole tree between two arbitrary commits could take seconds (and was
+      // hitting the spawn timeout under load); restricting to the handful of
+      // referenced paths makes git walk almost nothing. The output is already
+      // the changed subset, so no post-filtering is needed.
+      const out = spawnSync("git", ["-C", workspace.path, "diff", "--name-only", genSha, currentSha, "--", ...files],
+        { timeout: 5000, encoding: "utf8" });
+      hit = out.status === 0
+        ? out.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+        : [];
+    } catch {
+      hit = [];
     }
-  } catch {}
+    if (staleDiffCache.size > 512) staleDiffCache.clear();
+    staleDiffCache.set(cacheKey, hit);
+  }
+
+  if (hit.length) {
+    blueprint.stale = true;
+    blueprint.staleFiles = hit;
+    blueprint.staleReason = `${hit.length} tracked file${hit.length > 1 ? "s" : ""} changed since this Blueprint was generated.`;
+  }
 }
 
 function renderBlueprintPrompt(ticket, workspace) {
@@ -2019,124 +1523,25 @@ function normalizeBlueprint(raw, ticket, workspace, providerId, meta = {}) {
   };
 }
 
-function roundUsd(value) {
-  return Math.round(Number(value || 0) * 10000) / 10000;
-}
-
-// ---------- Cost model + model routing ----------
-// Per-million-token USD pricing (May 2026). Single source of truth for both
-// measured (blueprint) and estimated (execution) cost. Update as prices move.
-const MODEL_PRICING = {
-  opus:   { in: 5.0,  out: 25.0, cachedIn: 0.5 },   // Claude Opus 4.7
-  sonnet: { in: 3.0,  out: 15.0, cachedIn: 0.3 },   // Claude Sonnet 4.6
-  haiku:  { in: 1.0,  out: 5.0,  cachedIn: 0.1 },   // Claude Haiku 4.5
-  codex:  { in: 1.25, out: 10.0, cachedIn: 0.125 }  // OpenAI codex-tier (approx)
-};
-function pricingFor(model) {
-  const m = String(model || "").toLowerCase();
-  if (m.includes("opus")) return { tier: "opus", ...MODEL_PRICING.opus };
-  if (m.includes("sonnet")) return { tier: "sonnet", ...MODEL_PRICING.sonnet };
-  if (m.includes("haiku")) return { tier: "haiku", ...MODEL_PRICING.haiku };
-  if (m.includes("codex") || m.includes("gpt")) return { tier: "codex", ...MODEL_PRICING.codex };
-  return null;
-}
-// Plan-and-execute routing: strong reasoning model plans, efficient coder executes.
-// Overridable via env or config.models.{blueprint,execution}.
+// ---------- Model routing ----------
 function blueprintModelAlias() {
-  return process.env.LOUPE_BLUEPRINT_MODEL || config.models?.blueprint || "opus";
+  return modelRouter.blueprintModelAlias();
 }
 function executionModelAlias() {
-  return process.env.LOUPE_EXECUTION_MODEL || config.models?.execution || "sonnet";
+  return modelRouter.executionModelAlias();
 }
 function codexExecutionModelAlias() {
-  return process.env.LOUPE_CODEX_EXECUTION_MODEL || config.models?.codexExecution || "gpt-5.5";
+  return modelRouter.codexExecutionModelAlias();
 }
 function executionModelAliasForHarness(harnessId) {
-  return harnessId === "codex" ? codexExecutionModelAlias() : executionModelAlias();
+  return modelRouter.executionModelAliasForHarness(harnessId);
 }
-// Hybrid blueprint routing: Sonnet for routine tickets (cheap), Opus only when
-// the ticket touches a risk area where a wrong plan is costly. Override via
-// LOUPE_BLUEPRINT_MODEL or config.models.blueprint.
 function blueprintModelForTicket(ticket) {
-  const override = process.env.LOUPE_BLUEPRINT_MODEL || config.models?.blueprint;
-  if (override) return override;
-  const hay = `${(ticket?.labels || []).join(" ")} ${ticket?.title || ""} ${ticket?.body || ""}`.toLowerCase();
-  const risky = ["auth", "login", "password", "token", "oauth", "payment", "billing",
-    "stripe", "charge", "refund", "security", "vulnerab", "migration", "schema",
-    "encrypt", "crypto", "permission", "privacy", "pii"].some((k) => hay.includes(k));
-  return risky ? "opus" : "sonnet";
-}
-// Exact cost from token usage (used for the MEASURED blueprint cost).
-function usdFromUsage(model, usage) {
-  const p = pricingFor(model);
-  if (!p || !usage) return null;
-  const cacheRead = usage.cache_read_input_tokens ?? usage.cacheReadInputTokens ?? 0;
-  const cacheWrite = usage.cache_creation_input_tokens ?? usage.cacheCreationInputTokens ?? 0;
-  const input = usage.input_tokens ?? usage.inputTokens ?? 0;   // fresh, uncached
-  const output = usage.output_tokens ?? usage.outputTokens ?? 0;
-  // Cache writes bill at ~1.25× base input (5-min TTL); reads at the cached rate.
-  return roundUsd((input * p.in + cacheWrite * p.in * 1.25 + cacheRead * p.cachedIn + output * p.out) / 1e6);
-}
-// Execution token estimate per size bucket (input context, output diff).
-// Heuristic seed — replaced by calibrated values once real runs accumulate.
-const EXEC_TOKENS = {
-  S:  { inLow: 25_000,  inHigh: 60_000,  out: 4_000 },
-  M:  { inLow: 60_000,  inHigh: 150_000, out: 10_000 },
-  L:  { inLow: 150_000, inHigh: 350_000, out: 25_000 },
-  XL: { inLow: 350_000, inHigh: 800_000, out: 60_000 }
-};
-
-function estimateExecutionCost(blueprint) {
-  if (!blueprint || blueprint.outcome !== "ready") return null;
-  const size = ["S", "M", "L", "XL"].includes(blueprint.size) ? blueprint.size : "M";
-  const bucket = EXEC_TOKENS[size];
-  const fileCount = Array.isArray(blueprint.files) ? blueprint.files.length : 0;
-  const riskCount = Array.isArray(blueprint.riskAreas) ? blueprint.riskAreas.length : 0;
-  const factor = 1 + Math.max(0, fileCount - 3) * 0.08 + riskCount * 0.12;
-  const model = executionModelAliasForHarness(blueprint.defaultAgent === "claude" ? "claude-code" : "codex");
-  const p = pricingFor(model) || MODEL_PRICING.sonnet;
-  const inLow = Math.round(bucket.inLow * factor);
-  const inHigh = Math.round(bucket.inHigh * factor);
-  return {
-    lowUsd: roundUsd((inLow * p.in + bucket.out * p.out) / 1e6),
-    highUsd: roundUsd((inHigh * p.in + bucket.out * 1.5 * p.out) / 1e6),
-    currency: "USD",
-    model,
-    tokensLow: inLow + bucket.out,
-    tokensHigh: inHigh + Math.round(bucket.out * 1.5),
-    calibrated: false,
-    basis: `estimate:${model}`
-  };
+  return modelRouter.blueprintModelForTicket(ticket);
 }
 
 function blueprintCostEstimate(blueprint) {
-  // Prefer cost computed from real token usage × our pricing table; fall back to
-  // the provider-reported cost (e.g. Claude CLI total_cost_usd).
-  const measured = usdFromUsage(blueprint?.model, blueprint?.usage);
-  const actual = measured ?? (typeof blueprint?.costUsd === "number" ? roundUsd(blueprint.costUsd) : null);
-  const execution = estimateExecutionCost(blueprint);
-  const u = blueprint?.usage || null;
-  return {
-    blueprint: {
-      actualUsd: actual,
-      currency: "USD",
-      measured: actual !== null,
-      provider: blueprint?.provider || null,
-      model: blueprint?.model || null,
-      tokens: u ? {
-        input: u.input_tokens ?? u.inputTokens ?? null,
-        output: u.output_tokens ?? u.outputTokens ?? null,
-        cached: u.cache_read_input_tokens ?? u.cacheReadInputTokens ?? null
-      } : null
-    },
-    execution,
-    total: execution ? {
-      lowUsd: roundUsd((actual || 0) + execution.lowUsd),
-      highUsd: roundUsd((actual || 0) + execution.highUsd),
-      currency: "USD",
-      includesEstimatedBlueprint: actual === null
-    } : null
-  };
+  return modelRouter.blueprintCostEstimate(blueprint);
 }
 
 function inferBlueprintFromTicket(ticket) {
@@ -2801,12 +2206,13 @@ async function finalizeBranch(session) {
 }
 
 function spawnCodex(session, message, { resume = false } = {}) {
+  const model = executionModelAliasForHarness("codex");
   const args = resume
     ? [
         "exec",
         "--json",
         "--model",
-        executionModelAliasForHarness("codex"),
+        model,
         "--sandbox",
         "workspace-write",
         "--skip-git-repo-check",
@@ -2820,7 +2226,7 @@ function spawnCodex(session, message, { resume = false } = {}) {
         "exec",
         "--json",
         "--model",
-        executionModelAliasForHarness("codex"),
+        model,
         "--sandbox",
         "workspace-write",
         "--skip-git-repo-check",
@@ -2841,6 +2247,7 @@ function spawnCodex(session, message, { resume = false } = {}) {
   });
 
   let stdoutBuffer = "";
+  let latestCostEvent = null;
   child.stdout.on("data", (chunk) => {
     stdoutBuffer += chunk.toString();
     const lines = stdoutBuffer.split(/\r?\n/);
@@ -2849,6 +2256,22 @@ function spawnCodex(session, message, { resume = false } = {}) {
       if (!line.trim()) continue;
       try {
         const payload = JSON.parse(line);
+        const costEvent = codexHarness.costEventFromCodexTokenCount(payload, model);
+        if (costEvent) {
+          latestCostEvent = costEvent;
+          continue;
+        }
+        if (codexHarness.isCodexTaskComplete(payload)) {
+          if (latestCostEvent) {
+            addEvent(session, {
+              ...latestCostEvent,
+              kind: "result",
+              durationMs: payload.payload?.duration_ms,
+              text: "Codex usage estimated from token counts."
+            });
+          }
+          continue;
+        }
         // Top-level failures (usage limits, failed turns) — surface as errors.
         if (payload.type === "error" || payload.type === "turn.failed") {
           addEvent(session, { type: "error", text: payload.message || payload.error?.message || "Codex run failed." });
@@ -2862,7 +2285,7 @@ function spawnCodex(session, message, { resume = false } = {}) {
           continue; // lifecycle noise — nothing to show
         }
         const item = payload.item;
-        const agentText = codexAgentText(payload, item);
+        const agentText = codexHarness.codexAgentText(payload, item);
         if (agentText) {
           emitAgentProse(session, { type: "agent_message" }, agentText);
         } else if (item?.type === "reasoning") {
@@ -2874,7 +2297,7 @@ function spawnCodex(session, message, { resume = false } = {}) {
           const cmd = item.command || item.parsed_cmd || "";
           addEvent(session, { type: "action", tool: "shell", text: cmd ? `$ ${cmd}` : "Ran a command" });
         } else if (item?.type === "file_change" || item?.type === "patch_apply") {
-          const changes = normalizeCodexFileChanges(item);
+          const changes = codexHarness.normalizeCodexFileChanges(item);
           if (changes.length) {
             for (const change of changes) {
               addEvent(session, {
@@ -2915,28 +2338,6 @@ function spawnCodex(session, message, { resume = false } = {}) {
   };
 
   return child;
-}
-
-function codexAgentText(payload, item) {
-  if (item?.type === "agent_message") return item.text || item.message || "";
-  if (payload?.type === "agent_message") return payload.text || payload.message || "";
-  if (payload?.type === "event_msg" && payload.payload?.type === "agent_message") {
-    return payload.payload.text || payload.payload.message || "";
-  }
-  if (payload?.type === "response_item" && payload.payload?.type === "message") {
-    return textFromCodexMessagePayload(payload.payload);
-  }
-  return "";
-}
-
-function textFromCodexMessagePayload(message) {
-  const content = message?.content;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((part) => typeof part === "string" ? part : part?.text || "")
-    .filter(Boolean)
-    .join("\n");
 }
 
 function spawnClaudeCode(session, message, { resume = false } = {}) {
@@ -3201,45 +2602,6 @@ function toolInputDiffPreview(toolName, input) {
   return empty;
 }
 
-function normalizeCodexFileChanges(item) {
-  const rawChanges = Array.isArray(item?.changes) && item.changes.length
-    ? item.changes
-    : [{ ...item, path: item?.path || item?.file || item?.filename }];
-
-  return rawChanges.map((change) => {
-    const path = change.path || change.file || change.filename || "";
-    const patch = String(change.patch || change.diff || change.unified_diff || "");
-    const stats = diffStats(patch);
-    return {
-      path,
-      status: change.status || change.change_type || change.kind || (item?.type === "patch_apply" ? "modified" : "modified"),
-      additions: numberOr(stats.additions, change.additions, change.added),
-      deletions: numberOr(stats.deletions, change.deletions, change.removed),
-      patch: patch.slice(0, 4000)
-    };
-  }).filter((change) => change.path || change.patch);
-}
-
-function diffStats(patch) {
-  if (!patch) return { additions: 0, deletions: 0 };
-  let additions = 0;
-  let deletions = 0;
-  for (const line of patch.split(/\r?\n/)) {
-    if (line.startsWith("+++") || line.startsWith("---")) continue;
-    if (line.startsWith("+")) additions += 1;
-    if (line.startsWith("-")) deletions += 1;
-  }
-  return { additions, deletions };
-}
-
-function numberOr(...values) {
-  for (const value of values) {
-    const numeric = Number(value);
-    if (Number.isFinite(numeric)) return numeric;
-  }
-  return 0;
-}
-
 function serveStatic(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const requested = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
@@ -3362,15 +2724,16 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/api/v1/inbox") {
+    const token = getGithubAccessToken();
+    if (!token) {
+      sendJson(res, 401, { ok: false, error: { code: "GITHUB_AUTH_REQUIRED", message: "Connect GitHub first.", retryable: false } });
+      return;
+    }
+
+    // Build fresh, but fall back to the last-known-good list on failure or a
+    // transient empty response (see getInboxPayload) so the app never blanks.
     try {
-      const token = getGithubAccessToken();
-      if (!token) {
-        sendJson(res, 401, { ok: false, error: { code: "GITHUB_AUTH_REQUIRED", message: "Connect GitHub first.", retryable: false } });
-        return;
-      }
-      const payload = await fetchGithubInbox(token);
-      inboxCache.fetchedAt = Date.now();
-      inboxCache.payload = payload;
+      const payload = await getInboxPayload(token);
       sendJson(res, 200, { ok: true, data: payload, error: null });
     } catch (error) {
       sendJson(res, error.statusCode || 500, { ok: false, data: null, error: { code: "INBOX_FAILED", message: error.message, retryable: true } });
@@ -3657,15 +3020,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { ok: false, error: "GitHub is not connected. Connect GitHub with OAuth first." });
         return;
       }
-      const force = url.searchParams.get("refresh") === "1";
-      const fresh = inboxCache.payload && (Date.now() - inboxCache.fetchedAt) < inboxCache.ttlMs;
-      if (!force && fresh) {
-        sendJson(res, 200, { ok: true, cached: true, ...inboxCache.payload });
-        return;
-      }
-      const payload = await fetchGithubInbox(token);
-      inboxCache.fetchedAt = Date.now();
-      inboxCache.payload = payload;
+      const payload = await getInboxPayload(token);
       sendJson(res, 200, { ok: true, cached: false, ...payload });
     } catch (error) {
       sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
@@ -3763,6 +3118,31 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       sendJson(res, error.statusCode || 500, { ok: false, error: error.message });
     }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/v1/inbox/stream") {
+    const token = getGithubAccessToken();
+    if (!token) {
+      sendJson(res, 401, { ok: false, error: { code: "GITHUB_AUTH_REQUIRED", message: "Connect GitHub first.", retryable: false } });
+      return;
+    }
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "access-control-allow-origin": "*"
+    });
+    inboxClients.add(res);
+    startInboxPolling();
+    // Keep the connection alive through proxies/idle timeouts.
+    const heartbeat = setInterval(() => { try { res.write(": ping\n\n"); } catch {} }, 25_000);
+    if (heartbeat.unref) heartbeat.unref();
+    req.on("close", () => { clearInterval(heartbeat); inboxClients.delete(res); });
+    // Push the current inbox immediately so the client renders without a round trip.
+    getInboxPayload(token)
+      .then((payload) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(payload)}\n\n`); })
+      .catch(() => {});
     return;
   }
 
